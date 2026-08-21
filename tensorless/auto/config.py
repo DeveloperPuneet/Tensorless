@@ -43,15 +43,17 @@ def _auto_model_size(n_examples: int, kind: str):
             return 128, 4, 1, 2
 
 
-def _auto_batch_size(n_examples: int) -> int:
+def _auto_batch_size(n_examples: int, max_seq_len: int) -> int:
+    token_budget = 8192
+    sequence_batch = max(1, token_budget // max_seq_len)
     if n_examples < 200:
-        return 8
+        return min(8, sequence_batch)
     elif n_examples < 2000:
-        return 16
+        return min(16, sequence_batch)
     elif n_examples < 20000:
-        return 32
+        return min(32, sequence_batch)
     else:
-        return 64
+        return min(64, sequence_batch)
 
 
 def _auto_epochs(n_examples: int) -> int:
@@ -65,8 +67,22 @@ def _auto_epochs(n_examples: int) -> int:
         return 5
 
 
+def _effective_text_size(ds: Dataset) -> int:
+    """Estimate useful training examples for raw corpora."""
+    if ds.kind in ("text", "text_labeled"):
+        return max(len(ds), sum(len(text) for text in ds.texts) // 200)
+    return len(ds)
+
+
+def _auto_vocab_size(ds: Dataset) -> int:
+    if ds.kind not in ("text", "text_labeled"):
+        return 1000
+    unique_chars = len(set("".join(ds.texts)))
+    return min(4096, max(64, unique_chars * 8))
+
+
 def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
-    n = len(ds)
+    n = _effective_text_size(ds)
     task = user.task or detect_task(ds)
     model_type = user.model_type or (
         "transformer" if task in ("text-generation", "text-classification") else "mlp"
@@ -82,6 +98,7 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
     out = user.out or "model.tl"
     checkpoint_dir = user.checkpoint_dir or (out + ".ckpt")
 
+    max_seq_len = user.max_seq_len or (256 if ds.kind in ("text", "text_labeled") else 1)
     resolved = ResolvedConfig(
         out=out,
         force=bool(user.force),
@@ -94,13 +111,13 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
         heads=user.heads or heads,
         ff_mult=user.ff_mult or ff_mult,
         dropout=user.dropout if user.dropout is not None else 0.1,
-        max_seq_len=user.max_seq_len or (256 if ds.kind in ("text", "text_labeled") else 1),
+        max_seq_len=max_seq_len,
         tokenizer=tokenizer,
-        bpe_vocab_size=user.bpe_vocab_size or 1000,
+        bpe_vocab_size=user.bpe_vocab_size if user.bpe_vocab_size is not None else _auto_vocab_size(ds),
         optimizer=user.optimizer or "adamw",
         learning_rate=user.learning_rate or (3e-4 if model_type == "transformer" else 1e-3),
         weight_decay=user.weight_decay if user.weight_decay is not None else 0.01,
-        batch_size=user.batch_size or _auto_batch_size(n),
+        batch_size=user.batch_size if user.batch_size is not None else _auto_batch_size(n, max_seq_len),
         epochs=user.epochs or _auto_epochs(n),
         max_steps=user.max_steps,
         grad_clip=user.grad_clip if user.grad_clip is not None else 1.0,

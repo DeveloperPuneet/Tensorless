@@ -60,3 +60,21 @@ def test_resume_uses_original_config_not_new_overrides(text_corpus, workdir):
     # the checkpoint's weights would fail with a shape mismatch).
     model = tl.train(text_corpus, out="model.tl", d_model=999)
     assert model.config["d_model"] == 16
+
+
+def test_resume_false_starts_from_scratch(text_corpus, workdir):
+    ds = load_dataset(text_corpus)
+    fp = fingerprint_path(text_corpus)
+    original = TrainConfig(
+        out="model.tl", max_steps=4, checkpoint_every=2, d_model=16, layers=1,
+        heads=2, max_seq_len=32, batch_size=16, epochs=1,
+    )
+    cfg = resolve_config(ds, original).to_dict()
+    ckpt_mgr = CheckpointManager(cfg["checkpoint_dir"])
+    run_training(ds=ds, cfg=cfg, checkpoint_mgr=ckpt_mgr, dataset_fingerprint=fp, log_fn=lambda *a, **k: None)
+
+    model = tl.train(
+        text_corpus, out="model.tl", resume=False, d_model=24, layers=1,
+        heads=2, max_seq_len=32, batch_size=16, epochs=1, verbose=False,
+    )
+    assert model.config["d_model"] == 24

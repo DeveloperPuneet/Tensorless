@@ -81,8 +81,8 @@ for resumption.
 
 | Task | Model | What's learned |
 |---|---|---|
-| `text-generation` | Small GPT-style decoder transformer, char-level tokenizer | Next-character prediction over your text |
-| `text-classification` | Same transformer backbone, classification head on the final token | Text → one of your labeled classes |
+| `text-generation` | Small GPT-style decoder transformer, BPE tokenizer by default | Next-token prediction over your text |
+| `text-classification` | Same transformer backbone, BPE tokenizer by default, classification head on the final token | Text → one of your labeled classes |
 | `classification` | MLP with per-column categorical embeddings | Row of features → one of your labeled classes |
 | `regression` | Same MLP, single continuous output | Row of features → a number |
 

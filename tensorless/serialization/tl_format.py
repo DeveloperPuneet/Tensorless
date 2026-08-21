@@ -44,6 +44,32 @@ REQUIRED_KEYS = (
 )
 
 
+def _migrate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize supported legacy payloads without changing model weights."""
+    migrated = dict(payload)
+    migrated.setdefault("tensorless_version", "unknown")
+    migrated.setdefault("metrics", {})
+    migrated.setdefault("training_complete", True)
+    migrated.setdefault("dataset_fingerprint", None)
+    migrated.setdefault("tokenizer_state", None)
+    migrated.setdefault("preprocessor_state", None)
+
+    config = migrated.get("config")
+    if isinstance(config, dict):
+        config.setdefault("tokenizer", "char")
+        config.setdefault("bpe_vocab_size", 1000)
+        config.setdefault("precision", "fp32")
+        config.setdefault("device", "cpu")
+        migrated["config"] = config
+
+    tokenizer_state = migrated.get("tokenizer_state")
+    if isinstance(tokenizer_state, dict):
+        tokenizer_state.setdefault("tokenizer_type", "char")
+        migrated["tokenizer_state"] = tokenizer_state
+
+    return migrated
+
+
 def save_tl(path: str, payload: Dict[str, Any]) -> None:
     payload = dict(payload)
     payload.setdefault("tl_format_version", TL_FORMAT_VERSION)
@@ -79,6 +105,10 @@ def load_tl(path: str, map_location: str = "cpu") -> Dict[str, Any]:
         )
 
     file_version = payload.get("tl_format_version")
+    if not isinstance(file_version, int):
+        raise SerializationError(
+            f"'{path}' has an invalid .tl format version. It may be corrupt."
+        )
     if file_version > TL_FORMAT_VERSION:
         raise SerializationError(
             f"'{path}' was created with a newer .tl format (v{file_version}) "
@@ -86,4 +116,4 @@ def load_tl(path: str, map_location: str = "cpu") -> Dict[str, Any]:
             f"(v{TL_FORMAT_VERSION}). Please upgrade Tensorless."
         )
 
-    return payload
+    return _migrate_payload(payload)

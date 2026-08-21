@@ -47,3 +47,45 @@ def test_model_is_single_portable_file(text_corpus, workdir):
     assert os.path.isfile("model.tl")
     # A single file -- not a directory -- contains everything needed.
     assert not os.path.isdir("model.tl")
+
+
+def test_legacy_tl_payload_is_migrated(workdir):
+    import torch
+
+    path = "legacy.tl"
+    torch.save(
+        {
+            "tl_format_version": 1,
+            "task": "text-generation",
+            "model_type": "transformer",
+            "config": {},
+            "meta": {},
+            "model_state_dict": {},
+        },
+        path,
+    )
+    payload = load_tl(path)
+    assert payload["training_complete"] is True
+    assert payload["metrics"] == {}
+    assert payload["config"]["tokenizer"] == "char"
+    assert payload["tokenizer_state"] is None
+
+
+def test_tl_invalid_version_raises(workdir):
+    import pytest
+    import torch
+
+    path = "invalid-version.tl"
+    torch.save(
+        {
+            "tl_format_version": "one",
+            "task": "text-generation",
+            "model_type": "transformer",
+            "config": {},
+            "meta": {},
+            "model_state_dict": {},
+        },
+        path,
+    )
+    with pytest.raises(SerializationError, match="invalid .tl format version"):
+        load_tl(path)

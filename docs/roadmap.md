@@ -5,18 +5,10 @@ a commitment or timeline.
 
 ## Near-term
 
-- **Subword/BPE tokenization** as an alternative to the default
-  character-level tokenizer, for better efficiency on larger text
-  corpora
-- **`.tl` format migration** — forward-compatible loading of files
-  written by older Tensorless versions
 - **Better tabular preprocessing** — handling of date/datetime columns,
   high-cardinality categorical columns, and more robust outlier handling
   for regression targets
 - **Progress bars** for training (currently plain print-based logging)
-- **`tl.train(..., resume=False)`** enforcement — currently `resume` is
-  accepted in `TrainConfig` but the automatic resume decision doesn't
-  yet fully respect an explicit `False` override in every code path
 - **Multi-GPU / distributed training** for larger datasets
 
 ## Medium-term
@@ -38,8 +30,6 @@ a commitment or timeline.
 
 - **Alternate backends** (JAX, a lightweight NumPy-only backend) behind
   the same `tl.train()`/`tl.load()` API
-- **Streaming/out-of-core training** for datasets too large to fit in
-  memory
 - **Export to other formats** (ONNX, TorchScript) from a `.tl` file for
   deployment outside Python
 

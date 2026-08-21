@@ -31,13 +31,22 @@ Once the task is known, `tensorless/auto/config.py` picks:
 
 - **model type**: `transformer` for text tasks, `mlp` for tabular tasks
 - **size** (`d_model`, `layers`, `heads`): scaled to dataset size, from
-  a tiny 2-layer/64-dim model for a few hundred examples up to an
+  a tiny 2-layer/64-dim model for a few hundred effective text examples up to an
   8-layer/384-dim model for 50,000+ examples
+
+For text corpora, effective examples include corpus character count, so a
+single large `.txt` file is not treated like one training example. BPE
+vocabulary size is also bounded from corpus character diversity rather than
+always using a fixed oversized vocabulary.
 
 This is a heuristic, not a search — the goal is "a model that trains
 quickly and doesn't wildly overfit or underfit for typical dataset
 sizes," not the best possible architecture. Override any of it:
 `tl.train("./data", d_model=512, layers=6)`.
+
+For a packaged English grammar starter corpus, use
+`tl.pretrain(out="english.tl")`. It is intended for demos and smoke tests;
+larger local corpora should be passed to `tl.train()`.
 
 ## 3. Hyperparameter selection
 

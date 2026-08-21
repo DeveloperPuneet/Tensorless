@@ -41,9 +41,13 @@ class BPETokenizer:
         return self._stoi[EOS]
 
     @classmethod
-    def build(cls, texts: Sequence[str], vocab_size: int = 1000) -> "BPETokenizer":
+    def build(
+        cls, texts: Sequence[str], vocab_size: int = 1000, min_frequency: int = 2
+    ) -> "BPETokenizer":
         if vocab_size < len(SPECIAL_TOKENS):
             raise ValueError(f"vocab_size must be at least {len(SPECIAL_TOKENS)}")
+        if min_frequency < 1:
+            raise ValueError("min_frequency must be at least 1")
 
         symbols = set(char for text in texts for char in text)
         vocab = list(SPECIAL_TOKENS) + sorted(symbols - set(SPECIAL_TOKENS))
@@ -58,14 +62,15 @@ class BPETokenizer:
             )
             if not counts:
                 break
-            best_pair, best_count = min(
-                counts.items(), key=lambda item: (-item[1], item[0])
+            candidates = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            best_pair = next(
+                (pair for pair, count in candidates
+                 if count >= min_frequency and pair[0] + pair[1] not in vocab),
+                None,
             )
-            if best_count < 2:
+            if best_pair is None:
                 break
             merged = best_pair[0] + best_pair[1]
-            if merged in vocab:
-                break
             merges.append(best_pair)
             vocab.append(merged)
             sequences = [cls._apply_merge(sequence, best_pair, merged) for sequence in sequences]

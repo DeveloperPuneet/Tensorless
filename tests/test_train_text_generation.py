@@ -3,6 +3,10 @@ import os
 import tensorless as tl
 from tensorless.tokenization.bpe_tokenizer import BPETokenizer
 from tensorless.serialization.tl_format import load_tl
+from tensorless.auto.config import resolve_config
+from tensorless.config import TrainConfig
+from tensorless.data.loader import Dataset
+from tensorless.training.data_prep import prepare_text_generation
 
 from .conftest import TINY_TEXT_KWARGS
 
@@ -37,6 +41,31 @@ def test_bpe_tokenizer_trains_and_reloads(text_corpus, workdir):
     reloaded = tl.load("bpe.tl")
     assert isinstance(reloaded.tokenizer, BPETokenizer)
     assert reloaded.tokenizer.decode(reloaded.tokenizer.encode("the quick")) == "the quick"
+
+
+def test_bpe_skips_duplicate_merges_and_preserves_text():
+    tokenizer = BPETokenizer.build(["abab abac", "abab abac"], vocab_size=64)
+    text = "abab abac"
+    assert tokenizer.decode(tokenizer.encode(text)) == text
+
+
+def test_builtin_english_pretraining(workdir):
+    model = tl.pretrain(
+        out="english.tl", epochs=1, max_steps=1, max_seq_len=32,
+        d_model=16, layers=1, heads=2, batch_size=2, checkpoint_every=1,
+        verbose=False,
+    )
+    assert model.task == "text-generation"
+    assert model.tokenizer is not None
+
+
+def test_long_text_generation_is_streamed_in_batches():
+    ds = Dataset(kind="text", source="memory", texts=["the quick brown fox " * 2000])
+    cfg = resolve_config(ds, TrainConfig(max_seq_len=32, tokenizer="char"))
+    prepared = prepare_text_generation(ds, cfg.to_dict())
+    batch = next(iter(prepared.train_loader))
+    assert batch[0].shape == (cfg.batch_size, 32)
+    assert len(prepared.train_loader.dataset) > cfg.batch_size
 
 
 def test_cpu_training_works(text_corpus, workdir):

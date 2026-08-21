@@ -40,6 +40,10 @@ Writes are atomic: Tensorless writes to a temporary file in the same
 directory and renames it into place, so a crash mid-write never leaves a
 corrupt checkpoint that would block resumption.
 
+When loading `.tl` files, Tensorless fills compatible fields introduced by
+older versions with safe defaults. Files created by a newer unsupported format
+version are rejected with an upgrade message instead of being partially read.
+
 ## How resumption works
 
 When `tl.train()` finds a checkpoint whose `dataset_fingerprint` matches

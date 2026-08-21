@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib.resources
 import os
 from typing import Any, Optional
 
@@ -92,7 +93,7 @@ def train(path: str, **kwargs: Any) -> LoadedModel:
                 return LoadedModel(existing)
 
         # 2. Is there an interrupted / matching checkpoint to resume from?
-        if checkpoint_mgr.exists():
+        if checkpoint_mgr.exists() and user_cfg.resume is not False:
             ckpt = checkpoint_mgr.load()
             if ckpt.get("dataset_fingerprint") == fingerprint:
                 if ckpt.get("training_complete"):
@@ -119,6 +120,10 @@ def train(path: str, **kwargs: Any) -> LoadedModel:
                         "checkpoint -- retraining from scratch."
                     )
                 checkpoint_mgr.clear()
+        elif checkpoint_mgr.exists():
+            if user_cfg.verbose:
+                print("[tensorless] resume=False -- ignoring the existing checkpoint.")
+            checkpoint_mgr.clear()
     else:
         checkpoint_mgr.clear()
 
@@ -160,6 +165,17 @@ def train(path: str, **kwargs: Any) -> LoadedModel:
         print(f"[tensorless] saved trained model to '{out}'")
 
     return LoadedModel(payload)
+
+
+def pretrain(
+    out: str = "english_pretrained.tl", language: str = "english", **kwargs: Any
+) -> LoadedModel:
+    """Pretrain a small language model on the built-in starter corpus."""
+    if language.lower() != "english":
+        raise ValueError("The built-in pretraining corpus currently supports only 'english'.")
+    corpus = importlib.resources.files("tensorless.data").joinpath("english_grammar.txt")
+    options = {"task": "text-generation", "out": out, **kwargs}
+    return train(str(corpus), **options)
 
 
 def _finalize_from_checkpoint(ckpt: dict, out: str, verbose: bool) -> LoadedModel:

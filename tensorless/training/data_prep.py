@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from torch.utils.data import DataLoader, Dataset as TorchDataset
+from torch.utils.data import DataLoader, Dataset as TorchDataset, IterableDataset
 
 from ..data.loader import Dataset
 from ..data.tabular import TabularPreprocessor
@@ -31,19 +31,35 @@ class PreparedData:
     preprocessor: Optional[TabularPreprocessor] = None
 
 
-class _LMChunkDataset(TorchDataset):
-    def __init__(self, token_ids: List[int], block_size: int):
-        self.ids = token_ids
+class _StreamingLMChunkDataset(IterableDataset):
+    """Tokenize text lazily and yield fixed-size language-model batches."""
+
+    def __init__(self, texts: List[str], tokenizer, block_size: int):
+        self.texts = texts
+        self.tokenizer = tokenizer
         self.block_size = block_size
+        self._length = sum(self._count_chunks(text) for text in texts)
+
+    def _count_chunks(self, text: str) -> int:
+        token_count = len(self.tokenizer.encode(text, add_special_tokens=True))
+        return max(1, token_count - self.block_size)
 
     def __len__(self) -> int:
-        return max(0, len(self.ids) - self.block_size)
+        return self._length
 
-    def __getitem__(self, idx: int):
-        chunk = self.ids[idx: idx + self.block_size + 1]
-        x = torch.tensor(chunk[:-1], dtype=torch.long)
-        y = torch.tensor(chunk[1:], dtype=torch.long)
-        return x, y
+    def __iter__(self):
+        for text in self.texts:
+            ids = self.tokenizer.encode(text, add_special_tokens=True)
+            if len(ids) <= self.block_size:
+                ids = ids + [self.tokenizer.pad_id] * (self.block_size + 1 - len(ids))
+            for start in range(0, len(ids) - self.block_size):
+                chunk = ids[start: start + self.block_size + 1]
+                if len(chunk) != self.block_size + 1:
+                    continue
+                yield (
+                    torch.tensor(chunk[:-1], dtype=torch.long),
+                    torch.tensor(chunk[1:], dtype=torch.long),
+                )
 
 
 class _ClsTextDataset(TorchDataset):
@@ -98,30 +114,30 @@ def prepare_text_generation(
     ds: Dataset, cfg: Dict[str, Any], tokenizer=None
 ) -> PreparedData:
     tokenizer = tokenizer or _build_tokenizer(ds, cfg)
-    all_ids: List[int] = []
-    for t in ds.texts:
-        all_ids.extend(tokenizer.encode(t, add_special_tokens=True))
-
     block_size = cfg["max_seq_len"]
-    if len(all_ids) <= block_size:
-        # Pad tiny corpora so we have at least one training example.
-        all_ids = all_ids + [tokenizer.pad_id] * (block_size + 1 - len(all_ids))
-
-    n_val_tokens = int(len(all_ids) * cfg["val_split"])
-    if n_val_tokens > block_size + 1:
-        split_point = len(all_ids) - n_val_tokens
-        train_ids, val_ids = all_ids[:split_point], all_ids[split_point:]
+    n_val_texts = int(len(ds.texts) * cfg["val_split"])
+    if n_val_texts and n_val_texts < len(ds.texts):
+        train_texts = ds.texts[:-n_val_texts]
+        val_texts = ds.texts[-n_val_texts:]
+    elif cfg["val_split"] > 0 and len(ds.texts) == 1:
+        text = ds.texts[0]
+        split_point = int(len(text) * (1.0 - cfg["val_split"]))
+        if split_point >= block_size:
+            train_texts = [text[:split_point]]
+            val_texts = [text[split_point:]]
+        else:
+            train_texts, val_texts = ds.texts, None
     else:
-        train_ids, val_ids = all_ids, None
+        train_texts, val_texts = ds.texts, None
 
-    train_ds = _LMChunkDataset(train_ids, block_size)
+    train_ds = _StreamingLMChunkDataset(train_texts, tokenizer, block_size)
     train_loader = DataLoader(
-        train_ds, batch_size=cfg["batch_size"], shuffle=True, drop_last=False
+        train_ds, batch_size=cfg["batch_size"], shuffle=False, drop_last=False
     )
 
     val_loader = None
-    if val_ids is not None:
-        val_ds = _LMChunkDataset(val_ids, block_size)
+    if val_texts is not None:
+        val_ds = _StreamingLMChunkDataset(val_texts, tokenizer, block_size)
         if len(val_ds) > 0:
             val_loader = DataLoader(val_ds, batch_size=cfg["batch_size"], shuffle=False)
 
