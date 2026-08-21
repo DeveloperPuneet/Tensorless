@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader, Dataset as TorchDataset
 
 from ..data.loader import Dataset
 from ..data.tabular import TabularPreprocessor
+from ..tokenization.bpe_tokenizer import BPETokenizer
 from ..tokenization.char_tokenizer import CharTokenizer
 from ..auto.detector import target_column
 from ..errors import DataError
@@ -87,10 +88,16 @@ def _split_indices(n: int, val_split: float, seed: int) -> Tuple[List[int], List
     return train_idx, val_idx
 
 
+def _build_tokenizer(ds: Dataset, cfg: Dict[str, Any]):
+    if cfg.get("tokenizer", "bpe") == "bpe":
+        return BPETokenizer.build(ds.texts, vocab_size=cfg.get("bpe_vocab_size", 1000))
+    return CharTokenizer.build(ds.texts)
+
+
 def prepare_text_generation(
-    ds: Dataset, cfg: Dict[str, Any], tokenizer: Optional[CharTokenizer] = None
+    ds: Dataset, cfg: Dict[str, Any], tokenizer=None
 ) -> PreparedData:
-    tokenizer = tokenizer or CharTokenizer.build(ds.texts)
+    tokenizer = tokenizer or _build_tokenizer(ds, cfg)
     all_ids: List[int] = []
     for t in ds.texts:
         all_ids.extend(tokenizer.encode(t, add_special_tokens=True))
@@ -129,10 +136,10 @@ def prepare_text_generation(
 def prepare_text_classification(
     ds: Dataset,
     cfg: Dict[str, Any],
-    tokenizer: Optional[CharTokenizer] = None,
+    tokenizer=None,
     classes: Optional[List[str]] = None,
 ) -> PreparedData:
-    tokenizer = tokenizer or CharTokenizer.build(ds.texts)
+    tokenizer = tokenizer or _build_tokenizer(ds, cfg)
     classes = classes or sorted(set(ds.labels))
     label2id = {c: i for i, c in enumerate(classes)}
 

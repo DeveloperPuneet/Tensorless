@@ -7,26 +7,6 @@
 - Optional: a CUDA-capable GPU, or a TPU with `torch_xla` installed, for
   faster training. Tensorless works fine on CPU-only machines too.
 
-## Install from source
-
-Tensorless isn't published to PyPI yet. Install it directly from a
-checkout of this repository:
-
-```bash
-git clone https://github.com/tensorless/tensorless.git
-cd tensorless
-pip install -e .
-```
-
-The `-e` (editable) flag means changes to the source are picked up
-immediately without reinstalling — useful if you're also contributing.
-
-If you plan to run the test suite, install the dev extras too:
-
-```bash
-pip install -e ".[dev]"
-```
-
 ## Verify your installation
 
 ```bash

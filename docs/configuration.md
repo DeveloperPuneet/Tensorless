@@ -26,6 +26,8 @@ defaults.
 | `ff_mult` | auto | Feed-forward expansion multiplier (transformer only) |
 | `dropout` | `0.1` | Dropout probability |
 | `max_seq_len` | `256` (text) / `1` (tabular) | Max sequence length in tokens (text tasks) |
+| `tokenizer` | `"bpe"` | Text tokenizer: `"bpe"` or `"char"` |
+| `bpe_vocab_size` | `1000` | Maximum vocabulary size when `tokenizer="bpe"` |
 
 ## Optimization
 

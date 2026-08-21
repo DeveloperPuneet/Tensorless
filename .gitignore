@@ -8,3 +8,5 @@ dist/
 *.tl.ckpt/
 .DS_Store
 api.txt
+roadmap.txt
+cmd.txt

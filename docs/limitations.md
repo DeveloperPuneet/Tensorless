@@ -6,12 +6,10 @@ current limits:
 
 ## Models
 
-- The default text tokenizer is **character-level**, not subword/BPE.
-  This means no vocabulary file dependency and it works on any language
-  out of the box, but it's less token-efficient than production
-  tokenizers (GPT-style BPE, SentencePiece), so very long documents take
-  more sequence positions to represent, and generation quality per
-  parameter is lower than a comparably-sized BPE-tokenized model.
+- The default text tokenizer is the dependency-free **BPE** tokenizer, which
+  learns merges from the training corpus. It is more token-efficient than the
+  optional `tokenizer="char"` alternative, but still simpler than production
+  tokenizers such as GPT-style BPE or SentencePiece.
 - Models are trained **from scratch** every time — there's no
   fine-tuning of pretrained checkpoints. This keeps things dependency-
   free and fast to set up, but means text-generation quality on small

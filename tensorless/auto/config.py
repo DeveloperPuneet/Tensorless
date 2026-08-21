@@ -71,6 +71,9 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
     model_type = user.model_type or (
         "transformer" if task in ("text-generation", "text-classification") else "mlp"
     )
+    tokenizer = user.tokenizer or "bpe"
+    if tokenizer not in ("char", "bpe"):
+        raise ValueError("tokenizer must be 'char' or 'bpe'")
 
     d_model, layers, heads, ff_mult = _auto_model_size(n, ds.kind)
 
@@ -92,6 +95,8 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
         ff_mult=user.ff_mult or ff_mult,
         dropout=user.dropout if user.dropout is not None else 0.1,
         max_seq_len=user.max_seq_len or (256 if ds.kind in ("text", "text_labeled") else 1),
+        tokenizer=tokenizer,
+        bpe_vocab_size=user.bpe_vocab_size or 1000,
         optimizer=user.optimizer or "adamw",
         learning_rate=user.learning_rate or (3e-4 if model_type == "transformer" else 1e-3),
         weight_decay=user.weight_decay if user.weight_decay is not None else 0.01,

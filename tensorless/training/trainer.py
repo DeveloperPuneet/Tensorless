@@ -19,7 +19,7 @@ from ..data.loader import Dataset
 from ..devices.device import get_torch_device
 from ..checkpoint.manager import CheckpointManager
 from ..models.registry import build_model
-from ..tokenization.char_tokenizer import CharTokenizer
+from ..tokenization import tokenizer_from_state_dict
 from ..data.tabular import TabularPreprocessor
 from .early_stopping import EarlyStopping
 from . import data_prep as dp
@@ -97,7 +97,7 @@ def run_training(
     preprocessor = None
     if resume_state is not None:
         if resume_state.get("tokenizer_state") is not None:
-            tokenizer = CharTokenizer.from_state_dict(resume_state["tokenizer_state"])
+            tokenizer = tokenizer_from_state_dict(resume_state["tokenizer_state"])
         if resume_state.get("preprocessor_state") is not None:
             preprocessor = TabularPreprocessor.from_state_dict(resume_state["preprocessor_state"])
 

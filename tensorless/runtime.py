@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Union
 import torch
 
 from .models.registry import build_model
-from .tokenization.char_tokenizer import CharTokenizer
+from .tokenization import tokenizer_from_state_dict
 from .data.tabular import TabularPreprocessor
 from .devices.device import get_torch_device
 from .errors import ModelError
@@ -35,7 +35,7 @@ class LoadedModel:
 
         self.tokenizer = None
         if payload.get("tokenizer_state") is not None:
-            self.tokenizer = CharTokenizer.from_state_dict(payload["tokenizer_state"])
+            self.tokenizer = tokenizer_from_state_dict(payload["tokenizer_state"])
 
         self.preprocessor = None
         if payload.get("preprocessor_state") is not None:

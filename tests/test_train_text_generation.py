@@ -1,6 +1,7 @@
 import os
 
 import tensorless as tl
+from tensorless.tokenization.bpe_tokenizer import BPETokenizer
 from tensorless.serialization.tl_format import load_tl
 
 from .conftest import TINY_TEXT_KWARGS
@@ -10,6 +11,7 @@ def test_train_text_generation_creates_tl_file(text_corpus, workdir):
     model = tl.train(text_corpus, out="model.tl", **TINY_TEXT_KWARGS)
     assert os.path.isfile("model.tl")
     assert model.task == "text-generation"
+    assert isinstance(model.tokenizer, BPETokenizer)
     assert model.info()["training_complete"] is True
 
 
@@ -19,6 +21,22 @@ def test_generate_after_reload(text_corpus, workdir):
     text = reloaded.generate("the quick", max_new_tokens=20)
     assert isinstance(text, str)
     assert len(text) > 0
+
+
+def test_bpe_tokenizer_trains_and_reloads(text_corpus, workdir):
+    model = tl.train(
+        text_corpus,
+        out="bpe.tl",
+        tokenizer="bpe",
+        bpe_vocab_size=64,
+        **TINY_TEXT_KWARGS,
+    )
+    assert isinstance(model.tokenizer, BPETokenizer)
+    assert model.tokenizer.decode(model.tokenizer.encode("the quick")) == "the quick"
+
+    reloaded = tl.load("bpe.tl")
+    assert isinstance(reloaded.tokenizer, BPETokenizer)
+    assert reloaded.tokenizer.decode(reloaded.tokenizer.encode("the quick")) == "the quick"
 
 
 def test_cpu_training_works(text_corpus, workdir):

@@ -33,6 +33,8 @@ class TrainConfig:
     ff_mult: Optional[int] = None
     dropout: Optional[float] = None
     max_seq_len: Optional[int] = None
+    tokenizer: Optional[str] = None           # "char" or "bpe"
+    bpe_vocab_size: Optional[int] = None
 
     # --- optimization ---
     optimizer: Optional[str] = None             # "adamw", "adam", "sgd"
@@ -89,6 +91,8 @@ class ResolvedConfig:
     ff_mult: int
     dropout: float
     max_seq_len: int
+    tokenizer: str
+    bpe_vocab_size: int
 
     optimizer: str
     learning_rate: float

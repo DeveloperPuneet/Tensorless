@@ -22,7 +22,8 @@ tensorless/
 │   ├── detector.py               Dataset -> task string
 │   └── config.py                   Dataset + TrainConfig -> ResolvedConfig
 ├── tokenization/
-│   └── char_tokenizer.py          CharTokenizer: vocab build/encode/decode/save/load
+│   ├── char_tokenizer.py          CharTokenizer: vocab build/encode/decode/save/load
+│   └── bpe_tokenizer.py           BPETokenizer: corpus-trained subword encoding
 ├── models/
 │   ├── transformer.py              TinyTransformer (GPT-style decoder)
 │   ├── mlp.py                       TabularMLP

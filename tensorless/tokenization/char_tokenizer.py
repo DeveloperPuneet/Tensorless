@@ -77,7 +77,7 @@ class CharTokenizer:
         return "".join(chars)
 
     def state_dict(self) -> Dict:
-        return {"vocab": self.vocab}
+        return {"tokenizer_type": "char", "vocab": self.vocab}
 
     @classmethod
     def from_state_dict(cls, state: Dict) -> "CharTokenizer":
