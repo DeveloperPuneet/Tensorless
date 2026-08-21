@@ -1,10 +1,10 @@
 """Tabular preprocessing.
 
 Fits simple, fully-reversible preprocessing on tabular records:
-  - numeric columns -> standardized (mean/std), missing values imputed
-    with the training-set mean
-  - categorical columns -> integer-indexed vocabulary (+ <unk>/<missing>),
-    fed into per-column embeddings by the MLP model
+    - numeric and datetime columns -> robustly scaled numeric features,
+        with missing values imputed with the training-set median
+    - categorical columns -> bounded frequency-ranked vocabulary (+ <unk>/<missing>),
+        fed into per-column embeddings by the MLP model
 
 The fitted state is small and JSON-serializable, so it can be embedded
 directly inside a `.tl` file and reproduced exactly at inference time.
@@ -12,6 +12,8 @@ directly inside a `.tl` file and reproduced exactly at inference time.
 
 from __future__ import annotations
 
+from collections import Counter
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,6 +21,7 @@ import torch
 
 _MISSING = "<missing>"
 _UNK = "<unk>"
+_MAX_CATEGORIES = 1000
 
 
 def _try_float(v: Any) -> Optional[float]:
@@ -32,9 +35,36 @@ def _try_float(v: Any) -> Optional[float]:
         return None
 
 
+def _try_datetime(v: Any) -> Optional[float]:
+    if not isinstance(v, str) or not v.strip():
+        return None
+    try:
+        value = v.strip().replace("Z", "+00:00")
+        return datetime.fromisoformat(value).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _robust_stats(values: List[float]) -> Tuple[float, float]:
+    ordered = sorted(values)
+    middle = ordered[len(ordered) // 2]
+    if len(ordered) % 2 == 0:
+        middle = (ordered[len(ordered) // 2 - 1] + middle) / 2
+    deviations = sorted(abs(value - middle) for value in values)
+    mad = deviations[len(deviations) // 2]
+    if len(deviations) % 2 == 0:
+        mad = (deviations[len(deviations) // 2 - 1] + mad) / 2
+    scale = max(mad * 1.4826, 1e-6)
+    if mad == 0.0 and len(values) > 1:
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        scale = max(variance ** 0.5, 1e-6)
+    return middle, scale
+
+
 @dataclass
 class ColumnStats:
-    kind: str  # "numeric" | "categorical"
+    kind: str  # "numeric" | "datetime" | "categorical"
     mean: float = 0.0
     std: float = 1.0
     vocab: List[str] = field(default_factory=list)
@@ -52,7 +82,7 @@ class TabularPreprocessor:
 
     @property
     def numeric_columns(self) -> List[str]:
-        return [c for c in self.feature_columns if self.column_stats[c].kind == "numeric"]
+        return [c for c in self.feature_columns if self.column_stats[c].kind in ("numeric", "datetime")]
 
     @property
     def categorical_columns(self) -> List[str]:
@@ -76,21 +106,25 @@ class TabularPreprocessor:
             n_numeric = sum(1 for v in numeric_vals if v is not None)
             if n_present > 0 and n_numeric / n_present > 0.95:
                 nums = [v for v in numeric_vals if v is not None]
-                mean = sum(nums) / len(nums) if nums else 0.0
-                var = sum((x - mean) ** 2 for x in nums) / len(nums) if nums else 1.0
-                std = max(var ** 0.5, 1e-6)
+                mean, std = _robust_stats(nums)
                 self.column_stats[col] = ColumnStats(kind="numeric", mean=mean, std=std)
             else:
-                cats = sorted({str(v) for v in values if v not in (None, "")})
+                datetime_vals = [_try_datetime(v) for v in values]
+                n_datetime = sum(1 for v in datetime_vals if v is not None)
+                if n_present > 0 and n_datetime / n_present > 0.95:
+                    dates = [v for v in datetime_vals if v is not None]
+                    mean, std = _robust_stats(dates)
+                    self.column_stats[col] = ColumnStats(kind="datetime", mean=mean, std=std)
+                    continue
+                counts = Counter(str(v) for v in values if v not in (None, ""))
+                cats = sorted(counts, key=lambda value: (-counts[value], value))[:_MAX_CATEGORIES]
                 vocab = [_MISSING, _UNK] + cats
                 self.column_stats[col] = ColumnStats(kind="categorical", vocab=vocab)
 
         target_vals = [r.get(target_column) for r in records]
         if task == "regression":
             nums = [v for v in (_try_float(v) for v in target_vals) if v is not None]
-            self.target_mean = sum(nums) / len(nums) if nums else 0.0
-            var = sum((x - self.target_mean) ** 2 for x in nums) / len(nums) if nums else 1.0
-            self.target_std = max(var ** 0.5, 1e-6)
+            self.target_mean, self.target_std = _robust_stats(nums) if nums else (0.0, 1.0)
         else:
             self.classes = sorted({str(v) for v in target_vals if v not in (None, "")})
 
@@ -109,7 +143,7 @@ class TabularPreprocessor:
         for i, r in enumerate(records):
             for j, col in enumerate(num_cols):
                 stats = self.column_stats[col]
-                v = _try_float(r.get(col))
+                v = _try_datetime(r.get(col)) if stats.kind == "datetime" else _try_float(r.get(col))
                 if v is None:
                     v = stats.mean
                 numeric[i, j] = (v - stats.mean) / stats.std

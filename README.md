@@ -48,6 +48,10 @@ tl.train("reviews/", task="text-classification")
 tl.train("housing.csv", task="regression")
 ```
 
+Tabular preprocessing automatically handles numeric values, ISO dates, and
+high-cardinality categories. Missing and rare values are handled using the
+fitted training data, and the same preprocessing is stored in the `.tl` file.
+
 Models are saved as `.tl` files and can be loaded later:
 
 ```python

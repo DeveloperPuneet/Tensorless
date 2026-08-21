@@ -5,9 +5,6 @@ a commitment or timeline.
 
 ## Near-term
 
-- **Better tabular preprocessing** — handling of date/datetime columns,
-  high-cardinality categorical columns, and more robust outlier handling
-  for regression targets
 - **Progress bars** for training (currently plain print-based logging)
 - **Multi-GPU / distributed training** for larger datasets
 

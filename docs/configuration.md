@@ -47,7 +47,7 @@ defaults.
 | Field | Default | Description |
 |---|---|---|
 | `val_split` | `0.1` (if ≥50 examples, else `0`) | Fraction of data held out for validation |
-| `patience` | `5` | Epochs without improvement before stopping early |
+| `patience` | `3` | Epochs without improvement before stopping early |
 | `min_delta` | `1e-4` | Minimum improvement to count as "improved" |
 
 ## Hardware

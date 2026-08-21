@@ -38,6 +38,11 @@ A directory can mix multiple files of the *same* format (e.g. several
 plain text files with structured (JSON/CSV) files in the same directory
 raises a `DataError` asking you to separate them.
 
+For tabular data, numeric columns are robustly scaled and missing values use
+the training median. ISO-8601 date and datetime columns are converted to
+numeric timestamps. Categorical columns are frequency-ranked and capped at
+1,000 learned values; rare or unseen values use the `<unk>` category.
+
 Tensorless never modifies, moves, or deletes files in your dataset
 directory. It only ever reads from `path`; all output goes to the `out`
 file and `checkpoint_dir`.
@@ -68,7 +73,9 @@ By default, Tensorless holds out `val_split` of the data (10% for
 datasets with 50+ examples, 0% for smaller ones where a held-out split
 wouldn't be meaningful) and tracks validation loss after each epoch. If
 validation loss doesn't improve by at least `min_delta` for `patience`
-consecutive epochs, training stops early.
+consecutive epochs, training stops early. The automatic default is 3
+consecutive epochs, and the completed model is still written to the `.tl`
+output file.
 
 ## Checkpointing during training
 
