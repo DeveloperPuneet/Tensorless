@@ -33,6 +33,7 @@ class MlxTinyTransformer(TinyTransformer):
     """The native Tensorless parameter layout with MLX math and gradients."""
 
     def __init__(self, *args, **kwargs):
+        self.precision = kwargs.pop("precision", "fp32")
         super().__init__(*args, **kwargs)
         d_model = kwargs.get("d_model", args[1] if len(args) > 1 else None)
         self.heads = kwargs.get("heads", args[3] if len(args) > 3 else None)
@@ -43,7 +44,8 @@ class MlxTinyTransformer(TinyTransformer):
 
     def _mlx_params(self):
         mx = _mlx()
-        return {name: mx.array(parameter.data) for name, parameter in self.named_parameters()}
+        dtype = {"fp16": mx.float16, "bf16": mx.bfloat16}.get(self.precision, mx.float32)
+        return {name: mx.array(parameter.data, dtype=dtype) for name, parameter in self.named_parameters()}
 
     def _forward_mlx(self, params, input_ids, attention_mask=None):
         mx = _mlx()
@@ -89,7 +91,7 @@ class MlxTinyTransformer(TinyTransformer):
 
         def loss_fn(current):
             logits = self._forward_mlx(current, input_ids, attention_mask)
-            flat_logits = logits.reshape((-1, logits.shape[-1]))
+            flat_logits = logits.reshape((-1, logits.shape[-1])).astype(mx.float32)
             flat_target = target.reshape((-1,))
             log_probs = flat_logits - mx.logsumexp(flat_logits, axis=-1, keepdims=True)
             losses = -mx.take_along_axis(log_probs, flat_target[:, None], axis=1).squeeze(1)

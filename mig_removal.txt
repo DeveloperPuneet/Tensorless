@@ -4,6 +4,4 @@ Apple MPS acceleration
 Automatic TPU/GPU/CPU device execution
 Real fp16 and bf16 mixed-precision training
 PyTorch CUDA memory management and kernels
-GPU/TPU distributed training
-Multi-GPU and multi-node training
 Direct access to PyTorch tensors, modules, autograd, and PyTorch optimizers

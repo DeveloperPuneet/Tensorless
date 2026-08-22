@@ -46,6 +46,9 @@ def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str,
         )
         if backend == "jax":
             model_kwargs["precision"] = cfg.get("precision", "fp32")
+            model_kwargs["gradient_checkpointing"] = cfg.get("gradient_checkpointing", False)
+        elif backend == "mlx":
+            model_kwargs["precision"] = cfg.get("precision", "fp32")
         elif backend == "numpy":
             model_kwargs["gradient_checkpointing"] = cfg.get("gradient_checkpointing", False)
         return model_class(**model_kwargs)

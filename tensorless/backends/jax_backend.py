@@ -7,6 +7,7 @@ optional dependency is not installed.
 from __future__ import annotations
 
 from typing import Optional
+import os
 
 import numpy as np
 
@@ -17,6 +18,13 @@ def _jax():
     try:
         import jax
         import jax.numpy as jnp
+        distributed_vars = ("JAX_COORDINATOR_ADDRESS", "JAX_PROCESS_COUNT", "JAX_PROCESS_ID")
+        if all(name in os.environ for name in distributed_vars) and not jax.distributed.is_initialized():
+            jax.distributed.initialize(
+                coordinator_address=os.environ["JAX_COORDINATOR_ADDRESS"],
+                num_processes=int(os.environ["JAX_PROCESS_COUNT"]),
+                process_id=int(os.environ["JAX_PROCESS_ID"]),
+            )
     except ImportError as exc:
         raise ImportError("JAX is required for the cuda/tpu backend; install tensorless[jax].") from exc
     return jax, jnp
@@ -93,10 +101,11 @@ class JaxTinyTransformer(TinyTransformer):
         params = self._jax_params()
         target = jnp.asarray(target, dtype=jnp.int32)
 
-        def loss_fn(current):
-            logits = self._forward_jax(current, input_ids, attention_mask)
+        def loss_fn(current, current_ids, current_target, current_mask):
+            forward = jax.checkpoint(self._forward_jax) if self.gradient_checkpointing else self._forward_jax
+            logits = forward(current, current_ids, current_mask)
             flat_logits = logits.reshape(-1, logits.shape[-1]).astype(jnp.float32)
-            flat_target = target.reshape(-1)
+            flat_target = current_target.reshape(-1)
             log_probs = jax.nn.log_softmax(flat_logits, axis=-1)
             losses = -jnp.take_along_axis(log_probs, flat_target[:, None], axis=1).squeeze(1)
             if self.task == "text-generation":
@@ -104,7 +113,25 @@ class JaxTinyTransformer(TinyTransformer):
                 return jnp.sum(jnp.where(valid, losses, 0.0)) / jnp.maximum(valid.sum(), 1)
             return jnp.mean(losses)
 
-        loss, gradients = jax.value_and_grad(loss_fn)(params)
+        mask = jnp.ones_like(input_ids, dtype=jnp.float32) if attention_mask is None else jnp.asarray(attention_mask)
+        devices = jax.local_device_count()
+        if devices > 1 and input_ids.shape[0] % devices == 0:
+            per_device_loss = jax.value_and_grad(loss_fn)
+
+            def mapped_step(current, ids, labels, current_mask):
+                value, gradients = per_device_loss(current, ids, labels, current_mask)
+                return jax.lax.pmean(value, "data"), jax.tree_util.tree_map(
+                    lambda gradient: jax.lax.pmean(gradient, "data"), gradients
+                )
+
+            shard = lambda value: value.reshape((devices, value.shape[0] // devices) + value.shape[1:])
+            loss, gradients = jax.pmap(mapped_step, axis_name="data", in_axes=(None, 0, 0, 0))(
+                params, shard(jnp.asarray(input_ids)), shard(target), shard(mask)
+            )
+            loss = loss[0]
+            gradients = jax.tree_util.tree_map(lambda gradient: gradient[0], gradients)
+        else:
+            loss, gradients = jax.value_and_grad(loss_fn)(params, input_ids, target, mask)
         for name, parameter in self.named_parameters():
             parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32)
         return float(loss)

@@ -37,7 +37,7 @@ tensorless/
 ├── serialization/
 │   └── tl_format.py                     save_tl/load_tl: the .tl file format
 ├── backends/
-│   ├── jax_backend.py                    optional CUDA/TPU transformer backend
+│   ├── jax_backend.py                    optional CUDA/TPU transformer backend and local data parallelism
 │   └── mlx_backend.py                    optional Apple Silicon MPS backend
 ├── devices/
 │   └── device.py                         accelerator detection and resolution
@@ -127,6 +127,12 @@ Extend `devices/device.py`'s `_*_available()` checks and
 and select it in `models/registry.py`, `training/trainer.py`, and
 `runtime.py`. Backend models must expose the native `state_dict()` contract so
 `.tl` files remain portable.
+
+When multiple local JAX CUDA or TPU devices are visible, the JAX transformer
+splits each compatible batch with `pmap` and averages gradients with a device
+collective. For multi-host jobs, set `JAX_COORDINATOR_ADDRESS`,
+`JAX_PROCESS_COUNT`, and `JAX_PROCESS_ID` consistently across processes before
+launching. Single-device training uses the same model without collectives.
 
 See [contributing.md](contributing.md) for the contribution process
 itself (tests, PRs, etc).

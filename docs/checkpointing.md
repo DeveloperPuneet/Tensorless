@@ -31,8 +31,9 @@ fingerprint-identical to what was originally used.
 
 Set `gradient_checkpointing=True` to reduce native transformer activation
 memory. Backward recomputes each block and replays its dropout state, trading
-extra compute for lower peak memory. Accelerator backends currently use their
-own automatic differentiation memory policy.
+extra compute for lower peak memory. The JAX backend uses `jax.checkpoint`
+for the same option and uses device collectives for local multi-device
+gradient reduction.
 
 ## When checkpoints are written
 

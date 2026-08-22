@@ -25,7 +25,7 @@ defaults.
 | `heads` | auto | Attention heads (transformer only) |
 | `ff_mult` | auto | Feed-forward expansion multiplier (transformer only) |
 | `dropout` | `0.1` | Dropout probability |
-| `gradient_checkpointing` | `False` | Recompute native transformer block activations during backward to reduce memory use |
+| `gradient_checkpointing` | `False` | Recompute transformer activations during backward to reduce memory use; native and JAX paths support this |
 | `max_seq_len` | `256` (text) / `1` (tabular) | Max sequence length in tokens (text tasks) |
 | `tokenizer` | `"bpe"` | Text tokenizer: `"bpe"` or `"char"` |
 | `bpe_vocab_size` | `1000` | Maximum vocabulary size when `tokenizer="bpe"` |
@@ -56,7 +56,7 @@ defaults.
 | Field | Default | Description |
 |---|---|---|
 | `device` | auto (`tpu` > `cuda` > `mps` > `cpu`) | Force a specific device; accelerator backends require their optional package |
-| `precision` | auto | `"fp32"`, `"fp16"`, or `"bf16"`; JAX accelerator transformers use the selected dtype and compute loss in fp32 |
+| `precision` | auto | `"fp32"`, `"fp16"`, or `"bf16"`; JAX and MLX accelerator transformers use the selected dtype and compute loss in fp32 |
 
 ## Checkpointing
 
