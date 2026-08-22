@@ -1,3 +1,4 @@
+import numpy as np
 import tensorless as tl
 from tensorless.data.tabular import TabularPreprocessor
 from tensorless.training.early_stopping import EarlyStopping
@@ -10,6 +11,22 @@ def test_train_tabular_classification(tabular_classification_csv, workdir):
     assert model.task == "classification"
     pred = model.predict({"age": 30, "income": 90000, "city": "NYC"})
     assert pred in ("0", "1")
+
+
+def test_training_is_reproducible_with_same_seed(tabular_classification_csv, workdir):
+    first = tl.train(
+        tabular_classification_csv, out="first.tl", seed=7, epochs=2,
+        d_model=16, layers=1, batch_size=32, verbose=False
+    )
+    second = tl.train(
+        tabular_classification_csv, out="second.tl", seed=7, epochs=2,
+        d_model=16, layers=1, batch_size=32, verbose=False
+    )
+    assert {key: value for key, value in first.metrics.items() if key != "elapsed_seconds"} == {
+        key: value for key, value in second.metrics.items() if key != "elapsed_seconds"
+    }
+    for name, parameter in first.model.named_parameters():
+        np.testing.assert_array_equal(parameter.data, dict(second.model.named_parameters())[name].data)
 
 
 def test_tabular_classification_learns_signal(tabular_classification_csv, workdir):

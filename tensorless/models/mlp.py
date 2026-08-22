@@ -18,16 +18,15 @@ class TabularMLP(Module):
         self.task = task
         self.n_numeric = n_numeric
         self.categorical_vocab_sizes = categorical_vocab_sizes
-        rng = np.random.default_rng()
-        self.embeddings = [Parameter(rng.normal(0, .02, (v, _embedding_dim(v))).astype(np.float32)) for v in categorical_vocab_sizes]
+        self.embeddings = [Parameter(np.random.normal(0, .02, (v, _embedding_dim(v))).astype(np.float32)) for v in categorical_vocab_sizes]
         in_dim = n_numeric + sum(_embedding_dim(v) for v in categorical_vocab_sizes)
         self.weights, self.biases = [], []
         for i in range(layers):
             fan_in = in_dim if i == 0 else d_model
-            self.weights.append(Parameter(rng.normal(0, .02, (fan_in, d_model)).astype(np.float32)))
+            self.weights.append(Parameter(np.random.normal(0, .02, (fan_in, d_model)).astype(np.float32)))
             self.biases.append(Parameter(np.zeros(d_model, dtype=np.float32)))
         out_dim = n_classes if task == "classification" else 1
-        self.head_weight = Parameter(rng.normal(0, .02, (d_model if layers else in_dim, out_dim)).astype(np.float32))
+        self.head_weight = Parameter(np.random.normal(0, .02, (d_model if layers else in_dim, out_dim)).astype(np.float32))
         self.head_bias = Parameter(np.zeros(out_dim, dtype=np.float32))
 
     def forward(self, numeric, categorical, cache=False):

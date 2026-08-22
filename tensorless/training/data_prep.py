@@ -31,8 +31,9 @@ class PreparedData:
 
 
 class BatchLoader:
-    def __init__(self, dataset, batch_size, shuffle=False):
-        self.dataset, self.batch_size, self.shuffle = dataset, batch_size, shuffle
+    def __init__(self, dataset, batch_size, shuffle=False, seed=0):
+        self.dataset, self.batch_size, self.shuffle, self.seed = dataset, batch_size, shuffle, seed
+        self.epoch = 0
     def __len__(self):
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size
     def __iter__(self):
@@ -47,7 +48,9 @@ class BatchLoader:
                 yield tuple(np.stack(items) for items in zip(*batch))
             return
         indices = list(range(len(self.dataset)))
-        if self.shuffle: random.Random().shuffle(indices)
+        if self.shuffle:
+            random.Random(self.seed + self.epoch).shuffle(indices)
+            self.epoch += 1
         for start in range(0, len(indices), self.batch_size):
             values = [self.dataset[i] for i in indices[start:start + self.batch_size]]
             yield tuple(np.stack(items) for items in zip(*values))
@@ -202,7 +205,7 @@ def prepare_text_classification(
             [labels[i] for i in indices],
         )
 
-    train_loader = BatchLoader(subset(train_idx), cfg["batch_size"], shuffle=True)
+    train_loader = BatchLoader(subset(train_idx), cfg["batch_size"], shuffle=True, seed=cfg["seed"])
     val_loader = (
         BatchLoader(subset(val_idx), cfg["batch_size"]) if val_idx else None
     )
@@ -236,7 +239,7 @@ def prepare_tabular(
         transformed["categorical"][train_idx],
         transformed["target"][train_idx],
     )
-    train_loader = BatchLoader(train_ds, cfg["batch_size"], shuffle=True)
+    train_loader = BatchLoader(train_ds, cfg["batch_size"], shuffle=True, seed=cfg["seed"])
 
     val_loader = None
     if val_idx:

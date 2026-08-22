@@ -20,15 +20,14 @@ class TransformerBlock(Module):
         if d_model % heads:
             raise ValueError(f"d_model ({d_model}) must be divisible by heads ({heads})")
         self.heads, self.head_dim, self.dropout = heads, d_model // heads, dropout
-        rng = np.random.default_rng()
-        self.qkv_weight = Parameter(rng.normal(0, .02, (d_model, 3 * d_model)).astype(np.float32))
+        self.qkv_weight = Parameter(np.random.normal(0, .02, (d_model, 3 * d_model)).astype(np.float32))
         self.qkv_bias = Parameter(np.zeros(3 * d_model, dtype=np.float32))
-        self.out_weight = Parameter(rng.normal(0, .02, (d_model, d_model)).astype(np.float32))
+        self.out_weight = Parameter(np.random.normal(0, .02, (d_model, d_model)).astype(np.float32))
         self.out_bias = Parameter(np.zeros(d_model, dtype=np.float32))
         hidden = d_model * ff_mult
-        self.ff1_weight = Parameter(rng.normal(0, .02, (d_model, hidden)).astype(np.float32))
+        self.ff1_weight = Parameter(np.random.normal(0, .02, (d_model, hidden)).astype(np.float32))
         self.ff1_bias = Parameter(np.zeros(hidden, dtype=np.float32))
-        self.ff2_weight = Parameter(rng.normal(0, .02, (hidden, d_model)).astype(np.float32))
+        self.ff2_weight = Parameter(np.random.normal(0, .02, (hidden, d_model)).astype(np.float32))
         self.ff2_bias = Parameter(np.zeros(d_model, dtype=np.float32))
 
     def forward(self, inputs, attention_mask=None, cache=False):
@@ -98,15 +97,14 @@ class TinyTransformer(Module):
         self.task, self.max_seq_len, self.pad_id = task, max_seq_len, pad_id
         self.gradient_checkpointing = gradient_checkpointing
         self.d_model = d_model
-        rng = np.random.default_rng()
-        self.tok_emb = Parameter(rng.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
-        self.pos_emb = Parameter(rng.normal(0, .02, (max_seq_len, d_model)).astype(np.float32))
+        self.tok_emb = Parameter(np.random.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
+        self.pos_emb = Parameter(np.random.normal(0, .02, (max_seq_len, d_model)).astype(np.float32))
         self.blocks = [TransformerBlock(d_model, heads, ff_mult, dropout) for _ in range(layers)]
         if task == "text-generation":
             self.head_bias = Parameter(np.zeros(vocab_size, dtype=np.float32))
             self.head_weight = self.tok_emb
         elif task == "text-classification":
-            self.head_weight = Parameter(rng.normal(0, .02, (d_model, n_classes)).astype(np.float32))
+            self.head_weight = Parameter(np.random.normal(0, .02, (d_model, n_classes)).astype(np.float32))
             self.head_bias = Parameter(np.zeros(n_classes, dtype=np.float32))
         else:
             raise ValueError(f"Unsupported task for TinyTransformer: {task}")
