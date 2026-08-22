@@ -53,13 +53,15 @@ def _show_progress(epoch, epochs, step, total_steps, loss):
 
 def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointManager,
                  dataset_fingerprint: str, resume_state: Optional[Dict[str, Any]] = None,
+                 pretrained_state: Optional[Dict[str, Any]] = None,
                  log_fn=print) -> Dict[str, Any]:
     np.random.seed(cfg["seed"])
     task, model_type = cfg["task"], cfg["model_type"]
     device = get_device(cfg["device"])
     if cfg["verbose"]: log_fn(f"[tensorless] task={task} model={model_type} device={cfg['device']} precision={cfg['precision']}")
-    tokenizer = tokenizer_from_state_dict(resume_state["tokenizer_state"]) if resume_state and resume_state.get("tokenizer_state") else None
-    preprocessor = TabularPreprocessor.from_state_dict(resume_state["preprocessor_state"]) if resume_state and resume_state.get("preprocessor_state") else None
+    source_state = resume_state or pretrained_state
+    tokenizer = tokenizer_from_state_dict(source_state["tokenizer_state"]) if source_state and source_state.get("tokenizer_state") else None
+    preprocessor = TabularPreprocessor.from_state_dict(source_state["preprocessor_state"]) if source_state and source_state.get("preprocessor_state") else None
     if task == "text-generation": prepared = dp.prepare_text_generation(ds, cfg, tokenizer=tokenizer)
     elif task == "text-classification": prepared = dp.prepare_text_classification(ds, cfg, tokenizer=tokenizer, classes=resume_state["meta"]["classes"] if resume_state else None)
     elif task in ("classification", "regression"): prepared = dp.prepare_tabular(ds, cfg, task, preprocessor)
@@ -71,6 +73,14 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
         elif device == "mps":
             backend = "mlx"
     model = build_model(task, model_type, cfg, prepared.meta, backend=backend)
+    if pretrained_state is not None:
+        try:
+            model.load_state_dict(pretrained_state["model_state_dict"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "Pretrained weights are incompatible with the target model. "
+                "Keep the task, tokenizer, and architecture dimensions compatible."
+            ) from exc
     optimizer = _build_optimizer(model, cfg)
     total_steps = cfg.get("max_steps") or max(1, len(prepared.train_loader)) * cfg["epochs"]
     scheduler = LambdaScheduler(optimizer, cfg["warmup_steps"], total_steps)

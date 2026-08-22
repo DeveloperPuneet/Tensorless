@@ -55,7 +55,8 @@ def inspect(path: str) -> InspectionReport:
 def train(path: str, **kwargs: Any) -> LoadedModel:
     """Train a model on the dataset at `path`, fully automatically by
     default. Any field of `TrainConfig` can be overridden via keyword
-    argument, e.g. `tl.train("./data", d_model=512, layers=6)`.
+    argument, e.g. `tl.train("./data", d_model=512, layers=6)`. Pass
+    `pretrained="base.tl"` to fine-tune an existing Tensorless model.
 
     Implements the "Smart Auto Check":
       - if an up-to-date trained model already exists for this exact
@@ -65,6 +66,14 @@ def train(path: str, **kwargs: Any) -> LoadedModel:
         `ask_on_data_change=True`), unless `force=True` is passed
     """
     user_cfg = _build_train_config(**kwargs)
+    pretrained_state = None
+    if user_cfg.pretrained:
+        try:
+            pretrained_state = load_tl(user_cfg.pretrained)
+        except Exception as exc:
+            raise ModelError(
+                f"Could not load pretrained model '{user_cfg.pretrained}': {exc}"
+            ) from exc
     out = user_cfg.out or "model.tl"
     checkpoint_dir = user_cfg.checkpoint_dir or (out + ".ckpt")
     checkpoint_mgr = CheckpointManager(checkpoint_dir)
@@ -130,6 +139,16 @@ def train(path: str, **kwargs: Any) -> LoadedModel:
     ds = load_dataset(path)
     resolved = resolve_config(ds, user_cfg)
     cfg = resolved.to_dict()
+    if pretrained_state is not None:
+        source_cfg = pretrained_state["config"]
+        for field in ("d_model", "layers", "heads", "ff_mult", "max_seq_len", "tokenizer", "bpe_vocab_size"):
+            if field not in user_cfg.overrides() and field in source_cfg:
+                cfg[field] = source_cfg[field]
+        if pretrained_state["task"] != cfg["task"] or pretrained_state["model_type"] != cfg["model_type"]:
+            raise ModelError(
+                "Pretrained model and target training data must use the same "
+                "task and model_type."
+            )
 
     if resume_state is not None:
         # Resumed runs must keep the exact architecture/config used
@@ -143,6 +162,7 @@ def train(path: str, **kwargs: Any) -> LoadedModel:
         checkpoint_mgr=checkpoint_mgr,
         dataset_fingerprint=fingerprint,
         resume_state=resume_state,
+        pretrained_state=pretrained_state if resume_state is None else None,
         log_fn=print if cfg.get("verbose", True) else (lambda *a, **k: None),
     )
 
@@ -202,6 +222,11 @@ def _finalize_from_checkpoint(ckpt: dict, out: str, verbose: bool) -> LoadedMode
 
 def load(path: str, device: Optional[str] = None) -> LoadedModel:
     """Load a trained `.tl` model for inference."""
+    return load_model(path, device=device)
+
+
+def load_pretrained(path: str, device: Optional[str] = None) -> LoadedModel:
+    """Load a portable model intended to be used as a fine-tuning base."""
     return load_model(path, device=device)
 
 

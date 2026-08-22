@@ -20,6 +20,7 @@ class TrainConfig:
 
     # --- output / lifecycle ---
     out: Optional[str] = None                 # output .tl path, default "model.tl"
+    pretrained: Optional[str] = None          # optional .tl weights to fine-tune
     force: bool = False                        # force retraining even if unchanged
     resume: Optional[bool] = None               # force/forbid resume (None = auto)
     ask_on_data_change: bool = False            # raise instead of auto-retrain on data change
@@ -81,6 +82,7 @@ class ResolvedConfig:
     """
 
     out: str
+    pretrained: Optional[str]
     force: bool
     resume: Optional[bool]
     ask_on_data_change: bool

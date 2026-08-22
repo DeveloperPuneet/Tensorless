@@ -59,6 +59,21 @@ def test_builtin_english_pretraining(workdir):
     assert model.tokenizer is not None
 
 
+def test_finetuning_uses_pretrained_weights(text_corpus, workdir):
+    tl.pretrain(
+        out="base.tl", epochs=1, max_steps=1, max_seq_len=32,
+        d_model=16, layers=1, heads=2, batch_size=2, checkpoint_every=1,
+        verbose=False,
+    )
+    model = tl.train(
+        text_corpus, pretrained="base.tl", out="finetuned.tl",
+        epochs=1, max_steps=1, batch_size=2, checkpoint_every=1,
+        verbose=False,
+    )
+    assert model.config["d_model"] == 16
+    assert tl.load_pretrained("base.tl").task == "text-generation"
+
+
 def test_long_text_generation_is_streamed_in_batches():
     ds = Dataset(kind="text", source="memory", texts=["the quick brown fox " * 2000])
     cfg = resolve_config(ds, TrainConfig(max_seq_len=32, tokenizer="char"))

@@ -12,7 +12,7 @@ ML with maximum automation and minimum setup.
 See https://github.com/tensorless/tensorless for full documentation.
 """
 
-from .api import train, pretrain, run, load, inspect
+from .api import train, pretrain, run, load, load_pretrained, inspect
 from .config import TrainConfig
 from .errors import (
     TensorlessError,
@@ -29,6 +29,7 @@ __all__ = [
     "pretrain",
     "run",
     "load",
+    "load_pretrained",
     "inspect",
     "TrainConfig",
     "TensorlessError",

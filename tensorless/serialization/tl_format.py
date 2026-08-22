@@ -56,6 +56,7 @@ def _migrate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     config = migrated.get("config")
     if isinstance(config, dict):
+        config.setdefault("pretrained", None)
         config.setdefault("tokenizer", "char")
         config.setdefault("bpe_vocab_size", 1000)
         config.setdefault("precision", "fp32")

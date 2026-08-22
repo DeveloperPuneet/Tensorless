@@ -101,6 +101,7 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
     max_seq_len = user.max_seq_len or (256 if ds.kind in ("text", "text_labeled") else 1)
     resolved = ResolvedConfig(
         out=out,
+        pretrained=user.pretrained,
         force=bool(user.force),
         resume=user.resume,
         ask_on_data_change=bool(user.ask_on_data_change),

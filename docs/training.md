@@ -12,6 +12,28 @@ Returns a `LoadedModel` (see [inference.md](inference.md)) ready for
 predictions, and writes `model.tl` (plus a `model.tl.ckpt/` checkpoint
 directory) to the current directory.
 
+## Pretraining and fine-tuning
+
+Use the built-in corpus (or any text corpus) to create a base model, then
+continue training its learned weights on your own data:
+
+```python
+base = tl.pretrain(out="english_pretrained.tl", epochs=10)
+model = tl.train(
+    "./my_text.txt",
+    pretrained="english_pretrained.tl",
+    out="my_model.tl",
+    epochs=5,
+    learning_rate=1e-4,
+)
+```
+
+The source tokenizer and compatible architecture are reused automatically.
+The fine-tuning run starts a fresh optimizer and scheduler; interrupted
+fine-tuning still resumes from its own checkpoint. Use
+`tl.load_pretrained("english_pretrained.tl")` when you want to load the base
+model directly for inference.
+
 ## Supported data formats
 
 | Format | Notes |
