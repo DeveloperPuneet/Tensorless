@@ -1,5 +1,0 @@
-TPU training and inference
-CUDA GPU training and inference
-Apple MPS acceleration
-Automatic TPU/GPU/CPU device execution
-Real fp16 and bf16 mixed-precision training

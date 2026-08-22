@@ -113,10 +113,12 @@ class JaxTinyTransformer(TinyTransformer):
                 return jnp.sum(jnp.where(valid, losses, 0.0)) / jnp.maximum(valid.sum(), 1)
             return jnp.mean(losses)
 
+        loss_scale = 128.0 if self.precision == "fp16" else 1.0
+        scaled_loss_fn = lambda *arguments: loss_fn(*arguments) * loss_scale
         mask = jnp.ones_like(input_ids, dtype=jnp.float32) if attention_mask is None else jnp.asarray(attention_mask)
         devices = jax.local_device_count()
         if devices > 1 and input_ids.shape[0] % devices == 0:
-            per_device_loss = jax.value_and_grad(loss_fn)
+            per_device_loss = jax.value_and_grad(scaled_loss_fn)
 
             def mapped_step(current, ids, labels, current_mask):
                 value, gradients = per_device_loss(current, ids, labels, current_mask)
@@ -129,12 +131,13 @@ class JaxTinyTransformer(TinyTransformer):
                 params, shard(jnp.asarray(input_ids)), shard(target), shard(mask)
             )
             loss = loss[0]
-            gradients = jax.tree_util.tree_map(lambda gradient: gradient[0], gradients)
+            gradients = jax.tree_util.tree_map(lambda gradient: gradient[0] / loss_scale, gradients)
         else:
-            loss, gradients = jax.value_and_grad(loss_fn)(params, input_ids, target, mask)
+            loss, gradients = jax.value_and_grad(scaled_loss_fn)(params, input_ids, target, mask)
+            gradients = jax.tree_util.tree_map(lambda gradient: gradient / loss_scale, gradients)
         for name, parameter in self.named_parameters():
             parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32)
-        return float(loss)
+        return float(loss) / loss_scale
 
     def generate(self, input_ids, max_new_tokens, temperature=.8, top_k=40, eos_id: Optional[int] = None):
         ids = np.asarray(input_ids, dtype=np.int64).copy()

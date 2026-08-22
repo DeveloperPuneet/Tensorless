@@ -100,10 +100,12 @@ class MlxTinyTransformer(TinyTransformer):
                 return mx.sum(mx.where(valid, losses, 0.0)) / mx.maximum(mx.sum(valid), 1)
             return mx.mean(losses)
 
-        loss, gradients = mx.value_and_grad(loss_fn)(params)
+        loss_scale = 128.0 if self.precision == "fp16" else 1.0
+        scaled_loss_fn = lambda current: loss_fn(current) * loss_scale
+        loss, gradients = mx.value_and_grad(scaled_loss_fn)(params)
         for name, parameter in self.named_parameters():
-            parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32)
-        return float(np.asarray(loss))
+            parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32) / loss_scale
+        return float(np.asarray(loss)) / loss_scale
 
     def generate(self, input_ids, max_new_tokens, temperature=.8, top_k=40, eos_id: Optional[int] = None):
         ids = np.asarray(input_ids, dtype=np.int64).copy()
