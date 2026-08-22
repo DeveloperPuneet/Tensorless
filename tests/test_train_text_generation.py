@@ -73,6 +73,14 @@ def test_cpu_training_works(text_corpus, workdir):
     assert model.config["device"] == "cpu"
 
 
+def test_gradient_checkpointing_training_works(text_corpus, workdir):
+    model = tl.train(
+        text_corpus, out="checkpointed.tl", device="cpu",
+        gradient_checkpointing=True, **TINY_TEXT_KWARGS
+    )
+    assert model.config["gradient_checkpointing"] is True
+
+
 def test_unchanged_dataset_skips_retraining(text_corpus, workdir):
     tl.train(text_corpus, out="model.tl", **TINY_TEXT_KWARGS)
     mtime_1 = os.path.getmtime("model.tl")

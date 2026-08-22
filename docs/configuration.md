@@ -25,6 +25,7 @@ defaults.
 | `heads` | auto | Attention heads (transformer only) |
 | `ff_mult` | auto | Feed-forward expansion multiplier (transformer only) |
 | `dropout` | `0.1` | Dropout probability |
+| `gradient_checkpointing` | `False` | Recompute native transformer block activations during backward to reduce memory use |
 | `max_seq_len` | `256` (text) / `1` (tabular) | Max sequence length in tokens (text tasks) |
 | `tokenizer` | `"bpe"` | Text tokenizer: `"bpe"` or `"char"` |
 | `bpe_vocab_size` | `1000` | Maximum vocabulary size when `tokenizer="bpe"` |
@@ -63,6 +64,7 @@ defaults.
 |---|---|---|
 | `checkpoint_every` | `50` | Steps between checkpoint writes |
 | `checkpoint_dir` | `"<out>.ckpt"` | Checkpoint directory |
+| `checkpoint_shard_size_mb` | `0` | Split model and optimizer checkpoint state into parts of approximately this size; `0` keeps the single-file format |
 
 ## Misc
 

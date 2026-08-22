@@ -29,6 +29,11 @@ final `.tl` file — nothing about resumption depends on the original
 dataset still being on disk in the same location, only on it being
 fingerprint-identical to what was originally used.
 
+Set `gradient_checkpointing=True` to reduce native transformer activation
+memory. Backward recomputes each block and replays its dropout state, trading
+extra compute for lower peak memory. Accelerator backends currently use their
+own automatic differentiation memory policy.
+
 ## When checkpoints are written
 
 - Every `checkpoint_every` steps (default: 50) during training, with
@@ -43,8 +48,10 @@ corrupt checkpoint that would block resumption.
 
 JAX and MLX accelerator arrays are converted to portable NumPy arrays before
 they enter a `.tl` file or checkpoint. This keeps models loadable on a CPU
-machine. Large-model sharding is not implemented yet; checkpoints are still
-single-file native state snapshots.
+machine. Set `checkpoint_shard_size_mb` above zero to store model and
+optimizer state in independently readable shard files plus a small
+`checkpoint.pt` manifest. The normal resume API reconstructs the state
+automatically.
 
 When loading `.tl` files, Tensorless fills compatible fields introduced by
 older versions with safe defaults. Files created by a newer unsupported format

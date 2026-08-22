@@ -32,6 +32,7 @@ class TrainConfig:
     heads: Optional[int] = None
     ff_mult: Optional[int] = None
     dropout: Optional[float] = None
+    gradient_checkpointing: Optional[bool] = None
     max_seq_len: Optional[int] = None
     tokenizer: Optional[str] = None           # "char" or "bpe"
     bpe_vocab_size: Optional[int] = None
@@ -58,6 +59,7 @@ class TrainConfig:
     # --- checkpointing ---
     checkpoint_every: Optional[int] = None       # steps between checkpoints
     checkpoint_dir: Optional[str] = None
+    checkpoint_shard_size_mb: Optional[int] = None  # 0/None keeps one checkpoint file
 
     # --- misc ---
     seed: int = 42
@@ -90,6 +92,7 @@ class ResolvedConfig:
     heads: int
     ff_mult: int
     dropout: float
+    gradient_checkpointing: bool
     max_seq_len: int
     tokenizer: str
     bpe_vocab_size: int
@@ -112,6 +115,7 @@ class ResolvedConfig:
 
     checkpoint_every: int
     checkpoint_dir: str
+    checkpoint_shard_size_mb: int
 
     seed: int
     verbose: bool

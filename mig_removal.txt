@@ -6,7 +6,4 @@ Real fp16 and bf16 mixed-precision training
 PyTorch CUDA memory management and kernels
 GPU/TPU distributed training
 Multi-GPU and multi-node training
-Gradient checkpointing
-Sharded model and optimizer checkpoints
-Native compatibility with old PyTorch-based .tl files
 Direct access to PyTorch tensors, modules, autograd, and PyTorch optimizers

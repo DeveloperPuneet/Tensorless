@@ -111,6 +111,7 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
         heads=user.heads or heads,
         ff_mult=user.ff_mult or ff_mult,
         dropout=user.dropout if user.dropout is not None else 0.1,
+        gradient_checkpointing=bool(user.gradient_checkpointing),
         max_seq_len=max_seq_len,
         tokenizer=tokenizer,
         bpe_vocab_size=user.bpe_vocab_size if user.bpe_vocab_size is not None else _auto_vocab_size(ds),
@@ -129,6 +130,7 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
         precision=precision,
         checkpoint_every=user.checkpoint_every or 50,
         checkpoint_dir=checkpoint_dir,
+        checkpoint_shard_size_mb=user.checkpoint_shard_size_mb or 0,
         seed=user.seed,
         verbose=user.verbose,
     )

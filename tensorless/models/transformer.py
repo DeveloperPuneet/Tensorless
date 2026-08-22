@@ -93,9 +93,10 @@ class TransformerBlock(Module):
 class TinyTransformer(Module):
     """A fast embedding plus pooled/sequence language model."""
     def __init__(self, vocab_size, d_model, layers, heads, ff_mult, dropout, max_seq_len,
-                 task="text-generation", n_classes=0, pad_id=0):
+                 task="text-generation", n_classes=0, pad_id=0, gradient_checkpointing=False):
         self.training = True
         self.task, self.max_seq_len, self.pad_id = task, max_seq_len, pad_id
+        self.gradient_checkpointing = gradient_checkpointing
         self.d_model = d_model
         rng = np.random.default_rng()
         self.tok_emb = Parameter(rng.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
@@ -118,8 +119,14 @@ class TinyTransformer(Module):
         caches = []
         for block in self.blocks:
             if cache:
-                hidden, block_cache = block.forward(hidden, attention_mask, cache=True)
-                caches.append(block_cache)
+                if self.gradient_checkpointing:
+                    rng_state = np.random.get_state()
+                    block_input = hidden.copy()
+                    hidden = block.forward(hidden, attention_mask)
+                    caches.append((block_input, attention_mask, rng_state))
+                else:
+                    hidden, block_cache = block.forward(hidden, attention_mask, cache=True)
+                    caches.append(block_cache)
             else:
                 hidden = block.forward(hidden, attention_mask)
         if self.task == "text-generation":
@@ -148,6 +155,12 @@ class TinyTransformer(Module):
             dh = (grad @ self.head_weight.data.T)[:, None, :] * valid_mask[:, :, None]
             dh /= np.maximum(valid_mask.sum(1, keepdims=True)[:, :, None], 1)
         for block, block_cache in zip(self.blocks[::-1], caches[::-1]):
+            if self.gradient_checkpointing:
+                block_input, block_mask, rng_state = block_cache
+                current_rng_state = np.random.get_state()
+                np.random.set_state(rng_state)
+                _, block_cache = block.forward(block_input, block_mask, cache=True)
+                np.random.set_state(current_rng_state)
             dh = block.backward(dh, block_cache)
         self.pos_emb.grad.fill(0)
         np.add.at(self.tok_emb.grad, ids.reshape(-1), dh.reshape(-1, dh.shape[-1]))

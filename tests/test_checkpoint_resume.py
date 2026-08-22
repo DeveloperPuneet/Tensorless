@@ -1,4 +1,5 @@
 import os
+import numpy as np
 
 import tensorless as tl
 from tensorless.data.loader import load_dataset
@@ -15,6 +16,21 @@ def test_checkpoint_created_during_training(text_corpus, workdir):
     tl.train(text_corpus, out="model.tl", **TINY_TEXT_KWARGS)
     assert os.path.isdir("model.tl.ckpt")
     assert os.path.isfile(os.path.join("model.tl.ckpt", "checkpoint.pt"))
+
+
+def test_sharded_checkpoint_round_trip(workdir):
+    manager = CheckpointManager("sharded.ckpt")
+    state = {
+        "config": {"checkpoint_shard_size_mb": 1},
+        "model_state_dict": {"layer.0": np.zeros((4, 4))},
+        "optimizer_state_dict": {"step": 3, "m": [np.ones((4, 4))]},
+        "training_complete": False,
+    }
+    manager.save(state)
+    loaded = manager.load()
+    assert loaded["model_state_dict"]["layer.0"].shape == (4, 4)
+    assert loaded["optimizer_state_dict"]["step"] == 3
+    assert len(loaded["optimizer_state_dict"]["m"]) == 1
 
 
 def test_interrupted_training_resumes(text_corpus, workdir):
