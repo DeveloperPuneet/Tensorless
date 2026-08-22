@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import sys
 from typing import Any, Dict, Optional
 import numpy as np
 
@@ -38,6 +39,18 @@ def _compute_loss(task, model_type, model, batch, pad_id, backward=True):
     return softmax_cross_entropy(output, target)[0]
 
 
+def _show_progress(epoch, epochs, step, total_steps, loss):
+    width = 24
+    completed = min(width, int(width * step / max(1, total_steps)))
+    bar = "=" * completed + ">" * (completed < width) + " " * max(0, width - completed - 1)
+    print(
+        f"\r[tensorless] epoch {epoch}/{epochs} [{bar}] "
+        f"{step}/{total_steps} loss={loss:.4f}",
+        end="",
+        flush=True,
+    )
+
+
 def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointManager,
                  dataset_fingerprint: str, resume_state: Optional[Dict[str, Any]] = None,
                  log_fn=print) -> Dict[str, Any]:
@@ -57,31 +70,64 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
     scheduler = LambdaScheduler(optimizer, cfg["warmup_steps"], total_steps)
     early_stopper = EarlyStopping(patience=cfg["patience"], min_delta=cfg["min_delta"])
     start_epoch = global_step = 0
+    best_model_state = None
     if resume_state:
         model.load_state_dict(resume_state["model_state_dict"]); optimizer.load_state_dict(resume_state["optimizer_state_dict"]); scheduler.load_state_dict(resume_state["scheduler_state_dict"])
         start_epoch, global_step = resume_state["epoch"], resume_state["global_step"]
         early_stopper.best = resume_state.get("early_stopping_best", float("inf")); early_stopper.num_bad_checks = resume_state.get("early_stopping_bad_checks", 0)
+        if resume_state.get("best_model_state_dict") is not None:
+            best_model_state = resume_state["best_model_state_dict"]
     def checkpoint(epoch, complete):
-        checkpoint_mgr.save({"epoch": epoch, "global_step": global_step, "model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(), "scheduler_state_dict": scheduler.state_dict(), "early_stopping_best": early_stopper.best, "early_stopping_bad_checks": early_stopper.num_bad_checks, "config": cfg, "meta": prepared.meta, "tokenizer_state": prepared.tokenizer.state_dict() if prepared.tokenizer else None, "preprocessor_state": prepared.preprocessor.state_dict() if prepared.preprocessor else None, "dataset_fingerprint": dataset_fingerprint, "training_complete": complete})
+        checkpoint_mgr.save({"epoch": epoch, "global_step": global_step, "model_state_dict": model.state_dict(), "best_model_state_dict": best_model_state, "optimizer_state_dict": optimizer.state_dict(), "scheduler_state_dict": scheduler.state_dict(), "early_stopping_best": early_stopper.best, "early_stopping_bad_checks": early_stopper.num_bad_checks, "config": cfg, "meta": prepared.meta, "tokenizer_state": prepared.tokenizer.state_dict() if prepared.tokenizer else None, "preprocessor_state": prepared.preprocessor.state_dict() if prepared.preprocessor else None, "dataset_fingerprint": dataset_fingerprint, "training_complete": complete})
     last_train_loss = last_val_loss = None
     t0 = time.time(); stop = False
+    progress_enabled = cfg["verbose"] and sys.stdout.isatty()
     for epoch in range(start_epoch, cfg["epochs"]):
         model.train()
+        epoch_step = 0
+        total_epoch_steps = len(prepared.train_loader)
         for batch in prepared.train_loader:
+            epoch_step += 1
             optimizer.zero_grad(); last_train_loss = _compute_loss(task, model_type, model, batch, prepared.meta.get("pad_id", 0));
+            if not np.isfinite(last_train_loss):
+                raise FloatingPointError(f"Non-finite training loss at step {global_step + 1}: {last_train_loss}")
             if cfg["grad_clip"]:
                 norm = np.sqrt(sum(float(np.sum(p.grad * p.grad)) for p in model.parameters()))
+                if not np.isfinite(norm):
+                    raise FloatingPointError(f"Non-finite gradient norm at step {global_step + 1}: {norm}")
                 if norm > cfg["grad_clip"]:
                     for p in model.parameters(): p.grad *= cfg["grad_clip"] / (norm + 1e-12)
             optimizer.step(); scheduler.step(); global_step += 1
+            if progress_enabled:
+                _show_progress(epoch + 1, cfg["epochs"], epoch_step, total_epoch_steps, last_train_loss)
             if global_step % cfg["checkpoint_every"] == 0: checkpoint(epoch, False)
             if cfg.get("max_steps") and global_step >= cfg["max_steps"]: stop = True; break
-        if stop: break
+        if progress_enabled:
+            print()
+        if stop:
+            break
         if prepared.val_loader:
             model.eval(); losses = [_compute_loss(task, model_type, model, batch, prepared.meta.get("pad_id", 0), False) for batch in prepared.val_loader]; last_val_loss = sum(losses) / max(1, len(losses))
-            if early_stopper.step(last_val_loss) and early_stopper.should_stop: checkpoint(epoch, True); break
+            if not np.isfinite(last_val_loss):
+                raise FloatingPointError(f"Non-finite validation loss after epoch {epoch + 1}: {last_val_loss}")
+            if last_val_loss < early_stopper.best - early_stopper.min_delta:
+                best_model_state = model.state_dict()
+            early_stopper.step(last_val_loss)
+            if cfg["verbose"]:
+                log_fn(
+                    f"[tensorless] epoch {epoch + 1}/{cfg['epochs']} "
+                    f"train_loss={last_train_loss:.4f} val_loss={last_val_loss:.4f}"
+                )
+            if early_stopper.should_stop: checkpoint(epoch, True); break
+        elif cfg["verbose"]:
+            log_fn(
+                f"[tensorless] epoch {epoch + 1}/{cfg['epochs']} "
+                f"train_loss={last_train_loss:.4f}"
+            )
         checkpoint(epoch + 1, epoch + 1 >= cfg["epochs"])
     elapsed = time.time() - t0
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
     return {"model": model, "model_state_dict": model.state_dict(), "meta": prepared.meta, "tokenizer": prepared.tokenizer, "preprocessor": prepared.preprocessor, "metrics": {"final_train_loss": last_train_loss, "final_val_loss": last_val_loss, "global_step": global_step, "elapsed_seconds": elapsed}, "device": device}
     """Legacy implementation retained only as inert text.
 

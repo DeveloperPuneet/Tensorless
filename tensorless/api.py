@@ -179,6 +179,7 @@ def pretrain(
 
 
 def _finalize_from_checkpoint(ckpt: dict, out: str, verbose: bool) -> LoadedModel:
+    model_state = ckpt.get("best_model_state_dict") or ckpt["model_state_dict"]
     payload = {
         "tl_format_version": _tl_format_version,
         "tensorless_version": _tl_version,
@@ -186,7 +187,7 @@ def _finalize_from_checkpoint(ckpt: dict, out: str, verbose: bool) -> LoadedMode
         "model_type": ckpt["config"]["model_type"],
         "config": ckpt["config"],
         "meta": ckpt["meta"],
-        "model_state_dict": ckpt["model_state_dict"],
+        "model_state_dict": model_state,
         "tokenizer_state": ckpt.get("tokenizer_state"),
         "preprocessor_state": ckpt.get("preprocessor_state"),
         "dataset_fingerprint": ckpt["dataset_fingerprint"],

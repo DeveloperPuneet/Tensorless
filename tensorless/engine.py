@@ -17,31 +17,42 @@ class Parameter:
 
 class Module:
     def parameters(self) -> Iterator[Parameter]:
-        for value in self.__dict__.values():
+        seen = set()
+
+        def visit(value):
             if isinstance(value, Parameter):
-                yield value
+                if id(value) not in seen:
+                    seen.add(id(value))
+                    yield value
             elif isinstance(value, Module):
                 yield from value.parameters()
             elif isinstance(value, (list, tuple)):
                 for item in value:
-                    if isinstance(item, Parameter):
-                        yield item
-                    elif isinstance(item, Module):
-                        yield from item.parameters()
+                    yield from visit(item)
+
+        for value in self.__dict__.values():
+            yield from visit(value)
 
     def named_parameters(self, prefix: str = ""):
+        yield from self._named_parameters(prefix, set())
+
+    def _named_parameters(self, prefix: str, seen):
         for name, value in self.__dict__.items():
             full = f"{prefix}.{name}" if prefix else name
             if isinstance(value, Parameter):
-                yield full, value
+                if id(value) not in seen:
+                    seen.add(id(value))
+                    yield full, value
             elif isinstance(value, Module):
-                yield from value.named_parameters(full)
+                yield from value._named_parameters(full, seen)
             elif isinstance(value, (list, tuple)):
                 for i, item in enumerate(value):
                     if isinstance(item, Parameter):
-                        yield f"{full}.{i}", item
+                        if id(item) not in seen:
+                            seen.add(id(item))
+                            yield f"{full}.{i}", item
                     elif isinstance(item, Module):
-                        yield from item.named_parameters(f"{full}.{i}")
+                        yield from item._named_parameters(f"{full}.{i}", seen)
 
     def state_dict(self) -> Dict[str, np.ndarray]:
         return {name: parameter.data.copy() for name, parameter in self.named_parameters()}
