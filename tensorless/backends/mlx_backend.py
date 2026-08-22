@@ -49,13 +49,20 @@ class MlxTinyTransformer(TinyTransformer):
 
     def _forward_mlx(self, params, input_ids, attention_mask=None):
         mx = _mlx()
+
+        def layer_norm(x, gain, bias, eps=1e-5):
+            mean = mx.mean(x, axis=-1, keepdims=True)
+            var = mx.var(x, axis=-1, keepdims=True)
+            return (x - mean) / mx.sqrt(var + eps) * gain + bias
+
         input_ids = mx.array(input_ids, dtype=mx.int32)
         batch, length = input_ids.shape
         hidden = params["tok_emb"][input_ids] + params["pos_emb"][mx.arange(length)]
         causal = mx.tril(mx.ones((length, length), dtype=mx.bool_))
         for index in range(len(self.blocks)):
             prefix = f"blocks.{index}"
-            qkv = hidden @ params[f"{prefix}.qkv_weight"] + params[f"{prefix}.qkv_bias"]
+            normed1 = layer_norm(hidden, params[f"{prefix}.ln1_gain"], params[f"{prefix}.ln1_bias"])
+            qkv = normed1 @ params[f"{prefix}.qkv_weight"] + params[f"{prefix}.qkv_bias"]
             q, k, v = mx.split(qkv, 3, axis=-1)
             q = q.reshape(batch, length, self.heads, self.head_dim).transpose(0, 2, 1, 3)
             k = k.reshape(batch, length, self.heads, self.head_dim).transpose(0, 2, 1, 3)
@@ -70,10 +77,12 @@ class MlxTinyTransformer(TinyTransformer):
             context = context.transpose(0, 2, 1, 3).reshape(batch, length, self.d_model)
             attention = context @ params[f"{prefix}.out_weight"] + params[f"{prefix}.out_bias"]
             residual = hidden + attention
-            ff_pre = residual @ params[f"{prefix}.ff1_weight"] + params[f"{prefix}.ff1_bias"]
+            normed2 = layer_norm(residual, params[f"{prefix}.ln2_gain"], params[f"{prefix}.ln2_bias"])
+            ff_pre = normed2 @ params[f"{prefix}.ff1_weight"] + params[f"{prefix}.ff1_bias"]
             ff_hidden = mx.maximum(ff_pre, 0)
             ff = ff_hidden @ params[f"{prefix}.ff2_weight"] + params[f"{prefix}.ff2_bias"]
             hidden = residual + ff
+        hidden = layer_norm(hidden, params["ln_f_gain"], params["ln_f_bias"])
         if self.task == "text-generation":
             return hidden @ params["tok_emb"].T + params["head_bias"]
         mask = mx.ones((batch, length)) if attention_mask is None else mx.array(attention_mask)

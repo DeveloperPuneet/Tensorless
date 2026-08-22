@@ -1,11 +1,19 @@
-"""Compact NumPy text model retaining Tensorless transformer behavior."""
+"""Compact NumPy text model retaining Tensorless transformer behavior.
+
+Architecture: a standard pre-norm decoder-only transformer -- LayerNorm
+before attention and before the feed-forward block, plus a final LayerNorm
+before the output head. Normalization is what keeps deep stacks of residual
+blocks trainable; without it, gradients and activations drift as layers are
+stacked and generation quality suffers noticeably once you go beyond one or
+two blocks.
+"""
 
 from __future__ import annotations
 
 from typing import Optional
 import numpy as np
 
-from ..engine import Module, Parameter, softmax_cross_entropy
+from ..engine import Module, Parameter, softmax_cross_entropy, layer_norm_forward, layer_norm_backward
 
 
 def _dropout(value, probability, training):
@@ -20,10 +28,14 @@ class TransformerBlock(Module):
         if d_model % heads:
             raise ValueError(f"d_model ({d_model}) must be divisible by heads ({heads})")
         self.heads, self.head_dim, self.dropout = heads, d_model // heads, dropout
+        self.ln1_gain = Parameter(np.ones(d_model, dtype=np.float32))
+        self.ln1_bias = Parameter(np.zeros(d_model, dtype=np.float32))
         self.qkv_weight = Parameter(np.random.normal(0, .02, (d_model, 3 * d_model)).astype(np.float32))
         self.qkv_bias = Parameter(np.zeros(3 * d_model, dtype=np.float32))
         self.out_weight = Parameter(np.random.normal(0, .02, (d_model, d_model)).astype(np.float32))
         self.out_bias = Parameter(np.zeros(d_model, dtype=np.float32))
+        self.ln2_gain = Parameter(np.ones(d_model, dtype=np.float32))
+        self.ln2_bias = Parameter(np.zeros(d_model, dtype=np.float32))
         hidden = d_model * ff_mult
         self.ff1_weight = Parameter(np.random.normal(0, .02, (d_model, hidden)).astype(np.float32))
         self.ff1_bias = Parameter(np.zeros(hidden, dtype=np.float32))
@@ -32,7 +44,8 @@ class TransformerBlock(Module):
 
     def forward(self, inputs, attention_mask=None, cache=False):
         batch, length, d_model = inputs.shape
-        qkv = inputs @ self.qkv_weight.data + self.qkv_bias.data
+        normed1, ln1_cache = layer_norm_forward(inputs, self.ln1_gain.data, self.ln1_bias.data)
+        qkv = normed1 @ self.qkv_weight.data + self.qkv_bias.data
         q, k, v = np.split(qkv, 3, axis=-1)
         q, k, v = (value.reshape(batch, length, self.heads, self.head_dim).transpose(0, 2, 1, 3)
                    for value in (q, k, v))
@@ -50,26 +63,31 @@ class TransformerBlock(Module):
             context @ self.out_weight.data + self.out_bias.data, self.dropout, self.training
         )
         residual = inputs + attention
-        ff_pre = residual @ self.ff1_weight.data + self.ff1_bias.data
+        normed2, ln2_cache = layer_norm_forward(residual, self.ln2_gain.data, self.ln2_bias.data)
+        ff_pre = normed2 @ self.ff1_weight.data + self.ff1_bias.data
         ff_hidden = np.maximum(ff_pre, 0)
         ff, ff_keep = _dropout(ff_hidden @ self.ff2_weight.data + self.ff2_bias.data, self.dropout, self.training)
         output = residual + ff
         if not cache:
             return output
-        return output, (inputs, q, k, v, probabilities, dropped_attention, attention_keep, context,
-                        attention_keep_output, residual, ff_pre, ff_hidden, ff_keep)
+        return output, (inputs, normed1, ln1_cache, q, k, v, probabilities, dropped_attention, attention_keep,
+                        context, attention_keep_output, residual, normed2, ln2_cache, ff_pre, ff_hidden, ff_keep)
 
     def backward(self, gradient, cache):
-        (inputs, q, k, v, probabilities, dropped_attention, attention_keep, context,
-         attention_keep_output, residual, ff_pre, ff_hidden, ff_keep) = cache
+        (inputs, normed1, ln1_cache, q, k, v, probabilities, dropped_attention, attention_keep, context,
+         attention_keep_output, residual, normed2, ln2_cache, ff_pre, ff_hidden, ff_keep) = cache
         gradient_ff = gradient if ff_keep is None else gradient * ff_keep / (1.0 - self.dropout)
         self.ff2_weight.grad[...] = ff_hidden.reshape(-1, ff_hidden.shape[-1]).T @ gradient_ff.reshape(-1, gradient_ff.shape[-1])
         self.ff2_bias.grad[...] = gradient_ff.sum(axis=(0, 1))
         gradient_hidden = gradient_ff @ self.ff2_weight.data.T
         gradient_hidden *= ff_pre > 0
-        self.ff1_weight.grad[...] = residual.reshape(-1, residual.shape[-1]).T @ gradient_hidden.reshape(-1, gradient_hidden.shape[-1])
+        self.ff1_weight.grad[...] = normed2.reshape(-1, normed2.shape[-1]).T @ gradient_hidden.reshape(-1, gradient_hidden.shape[-1])
         self.ff1_bias.grad[...] = gradient_hidden.sum(axis=(0, 1))
-        gradient_residual = gradient + gradient_hidden @ self.ff1_weight.data.T
+        gradient_normed2 = gradient_hidden @ self.ff1_weight.data.T
+        gradient_residual_from_ff, ln2_gain_grad, ln2_bias_grad = layer_norm_backward(gradient_normed2, ln2_cache)
+        self.ln2_gain.grad[...] = ln2_gain_grad
+        self.ln2_bias.grad[...] = ln2_bias_grad
+        gradient_residual = gradient + gradient_residual_from_ff
         gradient_attention = gradient_residual if attention_keep_output is None else gradient_residual * attention_keep_output / (1.0 - self.dropout)
         gradient_context = gradient_attention @ self.out_weight.data.T
         self.out_weight.grad[...] = context.reshape(-1, context.shape[-1]).T @ gradient_attention.reshape(-1, gradient_attention.shape[-1])
@@ -83,10 +101,28 @@ class TransformerBlock(Module):
         scale = 1.0 / np.sqrt(self.head_dim)
         gradient_q = gradient_scores @ k * scale
         gradient_k = gradient_scores.transpose(0, 1, 3, 2) @ q * scale
-        gradient_qkv = np.concatenate((gradient_q, gradient_k, gradient_v), axis=-1).transpose(0, 2, 1, 3).reshape(inputs.shape[0], inputs.shape[1], -1)
-        self.qkv_weight.grad[...] = inputs.reshape(-1, inputs.shape[-1]).T @ gradient_qkv.reshape(-1, gradient_qkv.shape[-1])
+        # Merge each of q/k/v back from (batch, heads, length, head_dim) to
+        # (batch, length, d_model) *before* concatenating them, matching the
+        # forward pass's layout ([q_block | k_block | v_block] along the last
+        # axis, each block itself head-major). Concatenating on the head-dim
+        # axis first (as a prior version of this code did) interleaves heads
+        # and q/k/v in the wrong order and silently corrupts the qkv_weight /
+        # qkv_bias gradients for any heads > 1 configuration.
+        batch, length = inputs.shape[0], inputs.shape[1]
+
+        def _merge_heads(gradient):
+            return gradient.transpose(0, 2, 1, 3).reshape(batch, length, -1)
+
+        gradient_qkv = np.concatenate(
+            (_merge_heads(gradient_q), _merge_heads(gradient_k), _merge_heads(gradient_v)), axis=-1
+        )
+        self.qkv_weight.grad[...] = normed1.reshape(-1, normed1.shape[-1]).T @ gradient_qkv.reshape(-1, gradient_qkv.shape[-1])
         self.qkv_bias.grad[...] = gradient_qkv.sum(axis=(0, 1))
-        return gradient_residual + gradient_qkv @ self.qkv_weight.data.T
+        gradient_normed1 = gradient_qkv @ self.qkv_weight.data.T
+        gradient_inputs_from_attn, ln1_gain_grad, ln1_bias_grad = layer_norm_backward(gradient_normed1, ln1_cache)
+        self.ln1_gain.grad[...] = ln1_gain_grad
+        self.ln1_bias.grad[...] = ln1_bias_grad
+        return gradient_residual + gradient_inputs_from_attn
 
 
 class TinyTransformer(Module):
@@ -100,6 +136,8 @@ class TinyTransformer(Module):
         self.tok_emb = Parameter(np.random.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
         self.pos_emb = Parameter(np.random.normal(0, .02, (max_seq_len, d_model)).astype(np.float32))
         self.blocks = [TransformerBlock(d_model, heads, ff_mult, dropout) for _ in range(layers)]
+        self.ln_f_gain = Parameter(np.ones(d_model, dtype=np.float32))
+        self.ln_f_bias = Parameter(np.zeros(d_model, dtype=np.float32))
         if task == "text-generation":
             self.head_bias = Parameter(np.zeros(vocab_size, dtype=np.float32))
             self.head_weight = self.tok_emb
@@ -127,31 +165,35 @@ class TinyTransformer(Module):
                     caches.append(block_cache)
             else:
                 hidden = block.forward(hidden, attention_mask)
+        hidden_normed, lnf_cache = layer_norm_forward(hidden, self.ln_f_gain.data, self.ln_f_bias.data)
         if self.task == "text-generation":
-            out = hidden @ self.tok_emb.data.T + self.head_bias.data
+            out = hidden_normed @ self.tok_emb.data.T + self.head_bias.data
         else:
             mask = np.ones((batch, length), dtype=np.float32) if attention_mask is None else attention_mask
-            pooled = (hidden * mask[:, :, None]).sum(1) / np.maximum(mask.sum(1, keepdims=True), 1)
+            pooled = (hidden_normed * mask[:, :, None]).sum(1) / np.maximum(mask.sum(1, keepdims=True), 1)
             out = pooled @ self.head_weight.data + self.head_bias.data
-        return (out, (input_ids, hidden, attention_mask, caches)) if cache else out
+        return (out, (input_ids, hidden, hidden_normed, lnf_cache, attention_mask, caches)) if cache else out
 
     def loss_and_backward(self, input_ids, target, attention_mask=None):
-        logits, (ids, hidden, mask, caches) = self.forward(input_ids, attention_mask, cache=True)
+        logits, (ids, hidden, hidden_normed, lnf_cache, mask, caches) = self.forward(input_ids, attention_mask, cache=True)
         loss, grad = softmax_cross_entropy(logits, target, self.pad_id if self.task == "text-generation" else None)
         for parameter in self.parameters():
             parameter.grad.fill(0)
         self.head_bias.grad[...] = grad.reshape(-1, grad.shape[-1]).sum(axis=0)
         if self.task == "text-generation":
-            flat_h, flat_g = hidden.reshape(-1, hidden.shape[-1]), grad.reshape(-1, grad.shape[-1])
-            self.tok_emb.grad[...] += flat_g.T @ flat_h
-            dh = (flat_g @ self.tok_emb.data).reshape(hidden.shape)
+            flat_hn, flat_g = hidden_normed.reshape(-1, hidden_normed.shape[-1]), grad.reshape(-1, grad.shape[-1])
+            self.tok_emb.grad[...] += flat_g.T @ flat_hn
+            d_hidden_normed = (flat_g @ self.tok_emb.data).reshape(hidden_normed.shape)
         else:
             valid_mask = np.ones(ids.shape, dtype=np.float32) if mask is None else mask
-            pooled = (hidden * valid_mask[:, :, None]).sum(1) / np.maximum(valid_mask.sum(1, keepdims=True), 1)
+            pooled = (hidden_normed * valid_mask[:, :, None]).sum(1) / np.maximum(valid_mask.sum(1, keepdims=True), 1)
             self.head_weight.grad[...] = pooled.T @ grad
             self.head_bias.grad[...] = grad.sum(0)
-            dh = (grad @ self.head_weight.data.T)[:, None, :] * valid_mask[:, :, None]
-            dh /= np.maximum(valid_mask.sum(1, keepdims=True)[:, :, None], 1)
+            d_hidden_normed = (grad @ self.head_weight.data.T)[:, None, :] * valid_mask[:, :, None]
+            d_hidden_normed /= np.maximum(valid_mask.sum(1, keepdims=True)[:, :, None], 1)
+        dh, lnf_gain_grad, lnf_bias_grad = layer_norm_backward(d_hidden_normed, lnf_cache)
+        self.ln_f_gain.grad[...] = lnf_gain_grad
+        self.ln_f_bias.grad[...] = lnf_bias_grad
         for block, block_cache in zip(self.blocks[::-1], caches[::-1]):
             if self.gradient_checkpointing:
                 block_input, block_mask, rng_state = block_cache
@@ -178,176 +220,3 @@ class TinyTransformer(Module):
             ids = np.concatenate([ids, next_ids], axis=1)
             if eos_id is not None and np.all(next_ids == eos_id): break
         return ids
-        """A small, dependency-free legacy implementation retained only as inert text.
-
-Used for:
-  - "text-generation": next-token prediction over the char vocabulary
-  - "text-classification": same backbone, with a classification head on
-    the final token's hidden state instead of a language-modeling head
-
-Kept intentionally compact -- this is not meant to compete with
-production LLM training frameworks, it's meant to give Tensorless a real,
-working, from-scratch model that trains fast enough on CPU for the
-"zero setup" experience to actually be pleasant.
-
-from __future__ import annotations
-
-import math
-from typing import Optional
-
-import numpy as np
-
-
-class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model: int, heads: int, dropout: float):
-        super().__init__()
-        assert d_model % heads == 0, "d_model must be divisible by heads"
-        self.heads = heads
-        self.head_dim = d_model // heads
-        self.qkv = nn.Linear(d_model, 3 * d_model)
-        self.proj = nn.Linear(d_model, d_model)
-        self.dropout = dropout
-        self.resid_drop = nn.Dropout(dropout)
-
-    def forward(self, x: np.ndarray, attn_mask: Optional[np.ndarray] = None) -> np.ndarray:
-        B, T, C = x.shape
-        qkv = self.qkv(x)
-        q, k, v = qkv.split(C, dim=2)
-        q = q.view(B, T, self.heads, self.head_dim).transpose(1, 2)
-        k = k.view(B, T, self.heads, self.head_dim).transpose(1, 2)
-        v = v.view(B, T, self.heads, self.head_dim).transpose(1, 2)
-
-        out = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0.0, is_causal=attn_mask is None
-        )
-        out = out.transpose(1, 2).contiguous().view(B, T, C)
-        return self.resid_drop(self.proj(out))
-
-
-class MLP(nn.Module):
-    def __init__(self, d_model: int, ff_mult: int, dropout: float):
-        super().__init__()
-        self.fc1 = nn.Linear(d_model, d_model * ff_mult)
-        self.fc2 = nn.Linear(d_model * ff_mult, d_model)
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, x: np.ndarray) -> np.ndarray:
-        return self.drop(self.fc2(F.gelu(self.fc1(x))))
-
-
-class Block(nn.Module):
-    def __init__(self, d_model: int, heads: int, ff_mult: int, dropout: float):
-        super().__init__()
-        self.ln1 = nn.LayerNorm(d_model)
-        self.attn = CausalSelfAttention(d_model, heads, dropout)
-        self.ln2 = nn.LayerNorm(d_model)
-        self.mlp = MLP(d_model, ff_mult, dropout)
-
-    def forward(self, x: np.ndarray, attn_mask: Optional[np.ndarray] = None) -> np.ndarray:
-        x = x + self.attn(self.ln1(x), attn_mask=attn_mask)
-        x = x + self.mlp(self.ln2(x))
-        return x
-
-
-class TinyTransformer(nn.Module):
-    Legacy decoder-only transformer usable for LM or sequence classification.
-
-    def __init__(
-        self,
-        vocab_size: int,
-        d_model: int,
-        layers: int,
-        heads: int,
-        ff_mult: int,
-        dropout: float,
-        max_seq_len: int,
-        task: str = "text-generation",
-        n_classes: int = 0,
-        pad_id: int = 0,
-    ):
-        super().__init__()
-        self.task = task
-        self.max_seq_len = max_seq_len
-        self.pad_id = pad_id
-
-        self.tok_emb = nn.Embedding(vocab_size, d_model)
-        self.pos_emb = nn.Embedding(max_seq_len, d_model)
-        self.drop = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList(
-            [Block(d_model, heads, ff_mult, dropout) for _ in range(layers)]
-        )
-        self.ln_f = nn.LayerNorm(d_model)
-
-        if task == "text-generation":
-            self.head = nn.Linear(d_model, vocab_size, bias=False)
-            self.head.weight = self.tok_emb.weight  # weight tying
-        elif task == "text-classification":
-            assert n_classes > 0, "n_classes must be set for text-classification"
-            self.head = nn.Linear(d_model, n_classes)
-        else:
-            raise ValueError(f"Unsupported task for TinyTransformer: {task}")
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module: nn.Module) -> None:
-        if isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        B, T = input_ids.shape
-        assert T <= self.max_seq_len, (
-            f"Sequence length {T} exceeds max_seq_len {self.max_seq_len}"
-        )
-        pos = torch.arange(T, device=input_ids.device).unsqueeze(0)
-        x = self.tok_emb(input_ids) + self.pos_emb(pos)
-        x = self.drop(x)
-
-        attn_mask = None
-        if attention_mask is not None:
-            # Combine causal mask with padding mask.
-            causal = torch.tril(torch.ones(T, T, device=input_ids.device, dtype=torch.bool))
-            pad = attention_mask.bool().unsqueeze(1).unsqueeze(1)  # B,1,1,T
-            attn_mask = (causal.unsqueeze(0).unsqueeze(0) & pad)
-
-        for block in self.blocks:
-            x = block(x, attn_mask=attn_mask)
-        x = self.ln_f(x)
-
-        if self.task == "text-generation":
-            return self.head(x)  # B, T, vocab_size
-        else:
-            if attention_mask is not None:
-                lengths = attention_mask.sum(dim=1).clamp(min=1) - 1
-            else:
-                lengths = torch.full((B,), T - 1, device=input_ids.device)
-            pooled = x[torch.arange(B, device=input_ids.device), lengths]
-            return self.head(pooled)  # B, n_classes
-
-    @torch.no_grad()
-    def generate(
-        self,
-        input_ids: np.ndarray,
-        max_new_tokens: int,
-        temperature: float = 0.8,
-        top_k: Optional[int] = 40,
-        eos_id: Optional[int] = None,
-    ) -> np.ndarray:
-        self.eval()
-        for _ in range(max_new_tokens):
-            cond = input_ids[:, -self.max_seq_len:]
-            logits = self(cond)
-            logits = logits[:, -1, :] / max(temperature, 1e-5)
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float("inf")
-            probs = F.softmax(logits, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1)
-            input_ids = torch.cat([input_ids, next_id], dim=1)
-            if eos_id is not None and (next_id == eos_id).all():
-                break
-        return input_ids
-    """

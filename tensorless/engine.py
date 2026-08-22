@@ -83,6 +83,39 @@ class Module:
         return self.train(False)
 
 
+def layer_norm_forward(x: np.ndarray, gain: np.ndarray, bias: np.ndarray, eps: float = 1e-5):
+    """Normalize over the last axis, then apply a learned scale/shift.
+
+    Returns the normalized output plus a cache used by `layer_norm_backward`.
+    """
+    mean = x.mean(axis=-1, keepdims=True)
+    var = x.var(axis=-1, keepdims=True)
+    inv_std = 1.0 / np.sqrt(var + eps)
+    x_hat = (x - mean) * inv_std
+    out = x_hat * gain + bias
+    return out.astype(np.float32), (x_hat, inv_std, gain)
+
+
+def layer_norm_backward(grad_out: np.ndarray, cache):
+    """Backward pass matching `layer_norm_forward`.
+
+    Returns (grad_x, grad_gain, grad_bias).
+    """
+    x_hat, inv_std, gain = cache
+    d = grad_out.shape[-1]
+    flat_grad_out = grad_out.reshape(-1, d)
+    flat_x_hat = x_hat.reshape(-1, d)
+    grad_gain = (flat_grad_out * flat_x_hat).sum(axis=0)
+    grad_bias = flat_grad_out.sum(axis=0)
+    grad_x_hat = grad_out * gain
+    grad_x = inv_std / d * (
+        d * grad_x_hat
+        - grad_x_hat.sum(axis=-1, keepdims=True)
+        - x_hat * (grad_x_hat * x_hat).sum(axis=-1, keepdims=True)
+    )
+    return grad_x.astype(np.float32), grad_gain.astype(np.float32), grad_bias.astype(np.float32)
+
+
 def softmax_cross_entropy(logits: np.ndarray, targets: np.ndarray, ignore_index=None):
     flat = logits.reshape(-1, logits.shape[-1]).astype(np.float64)
     target = targets.reshape(-1).astype(np.int64)
