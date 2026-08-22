@@ -40,7 +40,8 @@ tensorless/
 │   ├── jax_backend.py                    optional CUDA/TPU transformer backend and local data parallelism
 │   └── mlx_backend.py                    optional Apple Silicon MPS backend
 ├── devices/
-│   └── device.py                         accelerator detection and resolution
+│   ├── device.py                         accelerator detection and resolution
+│   └── memory.py                         backend-neutral cache and memory controls
 └── cli/
     └── main.py                            argparse-based CLI
 ```
@@ -100,6 +101,9 @@ matching the dataset's fingerprint.
 - **A `.tl` file is the unit of portability.** Nothing about inference
   should require the original dataset, training script, or checkpoint
   directory to still exist.
+- **The public model API is backend-neutral.** `engine.Module` and
+  `engine.Parameter` expose parameters and gradients consistently while JAX
+  and MLX provide accelerator execution behind the same model contract.
 
 ## Extending Tensorless
 

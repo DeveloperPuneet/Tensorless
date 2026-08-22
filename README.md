@@ -72,5 +72,10 @@ model = tl.load("model.tl")
 print(model.info())
 ```
 
+The native extension API is in `tensorless.engine`: `Module`, `Parameter`,
+`Adam`, and `SGD` provide model parameters, gradients, and optimization
+without a PyTorch dependency. Accelerator cache helpers are available as
+`tensorless.devices.clear_memory()` and `tensorless.devices.memory_stats()`.
+
 See the [documentation](docs/quickstart.md) for data formats, configuration,
 checkpointing, and the command-line interface.

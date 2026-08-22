@@ -95,3 +95,8 @@ tl.train(
 Passing an unrecognized keyword raises a `ConfigError` listing every
 valid field name, so typos are caught immediately rather than silently
 ignored.
+
+For backend-neutral accelerator maintenance, use
+`tensorless.devices.clear_memory()` and
+`tensorless.devices.memory_stats()`. These helpers use JAX or MLX when
+available and otherwise safely do nothing.
