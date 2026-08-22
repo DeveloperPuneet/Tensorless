@@ -70,6 +70,13 @@ class Module:
 
     def train(self, mode: bool = True):
         self.training = mode
+        for value in self.__dict__.values():
+            if isinstance(value, Module):
+                value.train(mode)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, Module):
+                        item.train(mode)
         return self
 
     def eval(self):

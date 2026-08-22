@@ -8,6 +8,88 @@ import numpy as np
 from ..engine import Module, Parameter, softmax_cross_entropy
 
 
+def _dropout(value, probability, training):
+    if not training or probability <= 0:
+        return value, None
+    keep = np.random.random(value.shape) >= probability
+    return value * keep / (1.0 - probability), keep
+
+
+class TransformerBlock(Module):
+    def __init__(self, d_model, heads, ff_mult, dropout):
+        if d_model % heads:
+            raise ValueError(f"d_model ({d_model}) must be divisible by heads ({heads})")
+        self.heads, self.head_dim, self.dropout = heads, d_model // heads, dropout
+        rng = np.random.default_rng()
+        self.qkv_weight = Parameter(rng.normal(0, .02, (d_model, 3 * d_model)).astype(np.float32))
+        self.qkv_bias = Parameter(np.zeros(3 * d_model, dtype=np.float32))
+        self.out_weight = Parameter(rng.normal(0, .02, (d_model, d_model)).astype(np.float32))
+        self.out_bias = Parameter(np.zeros(d_model, dtype=np.float32))
+        hidden = d_model * ff_mult
+        self.ff1_weight = Parameter(rng.normal(0, .02, (d_model, hidden)).astype(np.float32))
+        self.ff1_bias = Parameter(np.zeros(hidden, dtype=np.float32))
+        self.ff2_weight = Parameter(rng.normal(0, .02, (hidden, d_model)).astype(np.float32))
+        self.ff2_bias = Parameter(np.zeros(d_model, dtype=np.float32))
+
+    def forward(self, inputs, attention_mask=None, cache=False):
+        batch, length, d_model = inputs.shape
+        qkv = inputs @ self.qkv_weight.data + self.qkv_bias.data
+        q, k, v = np.split(qkv, 3, axis=-1)
+        q, k, v = (value.reshape(batch, length, self.heads, self.head_dim).transpose(0, 2, 1, 3)
+                   for value in (q, k, v))
+        scores = q @ k.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)
+        scores = np.where(np.triu(np.ones((length, length), dtype=bool), 1), -1e9, scores)
+        if attention_mask is not None:
+            scores = np.where(attention_mask[:, None, None, :] > 0, scores, -1e9)
+        scores -= scores.max(axis=-1, keepdims=True)
+        probabilities = np.exp(scores)
+        probabilities /= probabilities.sum(axis=-1, keepdims=True)
+        dropped_attention, attention_keep = _dropout(probabilities, self.dropout, self.training)
+        context = dropped_attention @ v
+        context = context.transpose(0, 2, 1, 3).reshape(batch, length, d_model)
+        attention, attention_keep_output = _dropout(
+            context @ self.out_weight.data + self.out_bias.data, self.dropout, self.training
+        )
+        residual = inputs + attention
+        ff_pre = residual @ self.ff1_weight.data + self.ff1_bias.data
+        ff_hidden = np.maximum(ff_pre, 0)
+        ff, ff_keep = _dropout(ff_hidden @ self.ff2_weight.data + self.ff2_bias.data, self.dropout, self.training)
+        output = residual + ff
+        if not cache:
+            return output
+        return output, (inputs, q, k, v, probabilities, dropped_attention, attention_keep, context,
+                        attention_keep_output, residual, ff_pre, ff_hidden, ff_keep)
+
+    def backward(self, gradient, cache):
+        (inputs, q, k, v, probabilities, dropped_attention, attention_keep, context,
+         attention_keep_output, residual, ff_pre, ff_hidden, ff_keep) = cache
+        gradient_ff = gradient if ff_keep is None else gradient * ff_keep / (1.0 - self.dropout)
+        self.ff2_weight.grad[...] = ff_hidden.reshape(-1, ff_hidden.shape[-1]).T @ gradient_ff.reshape(-1, gradient_ff.shape[-1])
+        self.ff2_bias.grad[...] = gradient_ff.sum(axis=(0, 1))
+        gradient_hidden = gradient_ff @ self.ff2_weight.data.T
+        gradient_hidden *= ff_pre > 0
+        self.ff1_weight.grad[...] = residual.reshape(-1, residual.shape[-1]).T @ gradient_hidden.reshape(-1, gradient_hidden.shape[-1])
+        self.ff1_bias.grad[...] = gradient_hidden.sum(axis=(0, 1))
+        gradient_residual = gradient + gradient_hidden @ self.ff1_weight.data.T
+        gradient_attention = gradient_residual if attention_keep_output is None else gradient_residual * attention_keep_output / (1.0 - self.dropout)
+        gradient_context = gradient_attention @ self.out_weight.data.T
+        self.out_weight.grad[...] = context.reshape(-1, context.shape[-1]).T @ gradient_attention.reshape(-1, gradient_attention.shape[-1])
+        self.out_bias.grad[...] = gradient_attention.sum(axis=(0, 1))
+        gradient_context = gradient_context.reshape(context.shape[0], context.shape[1], self.heads, self.head_dim).transpose(0, 2, 1, 3)
+        gradient_probabilities = gradient_context @ v.transpose(0, 1, 3, 2)
+        if attention_keep is not None:
+            gradient_probabilities *= attention_keep / (1.0 - self.dropout)
+        gradient_v = dropped_attention.transpose(0, 1, 3, 2) @ gradient_context
+        gradient_scores = probabilities * (gradient_probabilities - (gradient_probabilities * probabilities).sum(axis=-1, keepdims=True))
+        scale = 1.0 / np.sqrt(self.head_dim)
+        gradient_q = gradient_scores @ k * scale
+        gradient_k = gradient_scores.transpose(0, 1, 3, 2) @ q * scale
+        gradient_qkv = np.concatenate((gradient_q, gradient_k, gradient_v), axis=-1).transpose(0, 2, 1, 3).reshape(inputs.shape[0], inputs.shape[1], -1)
+        self.qkv_weight.grad[...] = inputs.reshape(-1, inputs.shape[-1]).T @ gradient_qkv.reshape(-1, gradient_qkv.shape[-1])
+        self.qkv_bias.grad[...] = gradient_qkv.sum(axis=(0, 1))
+        return gradient_residual + gradient_qkv @ self.qkv_weight.data.T
+
+
 class TinyTransformer(Module):
     """A fast embedding plus pooled/sequence language model."""
     def __init__(self, vocab_size, d_model, layers, heads, ff_mult, dropout, max_seq_len,
@@ -17,8 +99,7 @@ class TinyTransformer(Module):
         rng = np.random.default_rng()
         self.tok_emb = Parameter(rng.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
         self.pos_emb = Parameter(rng.normal(0, .02, (max_seq_len, d_model)).astype(np.float32))
-        self.proj = Parameter(rng.normal(0, .02, (d_model, d_model)).astype(np.float32))
-        self.proj_bias = Parameter(np.zeros(d_model, dtype=np.float32))
+        self.blocks = [TransformerBlock(d_model, heads, ff_mult, dropout) for _ in range(layers)]
         if task == "text-generation":
             self.head_bias = Parameter(np.zeros(vocab_size, dtype=np.float32))
             self.head_weight = self.tok_emb
@@ -33,22 +114,29 @@ class TinyTransformer(Module):
         if length > self.max_seq_len:
             raise AssertionError(f"Sequence length {length} exceeds max_seq_len {self.max_seq_len}")
         hidden = self.tok_emb.data[input_ids] + self.pos_emb.data[np.arange(length)]
-        hidden = np.tanh(hidden @ self.proj.data + self.proj_bias.data)
+        caches = []
+        for block in self.blocks:
+            if cache:
+                hidden, block_cache = block.forward(hidden, attention_mask, cache=True)
+                caches.append(block_cache)
+            else:
+                hidden = block.forward(hidden, attention_mask)
         if self.task == "text-generation":
             out = hidden @ self.tok_emb.data.T + self.head_bias.data
         else:
             mask = np.ones((batch, length), dtype=np.float32) if attention_mask is None else attention_mask
             pooled = (hidden * mask[:, :, None]).sum(1) / np.maximum(mask.sum(1, keepdims=True), 1)
             out = pooled @ self.head_weight.data + self.head_bias.data
-        return (out, (input_ids, hidden, attention_mask)) if cache else out
+        return (out, (input_ids, hidden, attention_mask, caches)) if cache else out
 
     def loss_and_backward(self, input_ids, target, attention_mask=None):
-        logits, (ids, hidden, mask) = self.forward(input_ids, attention_mask, cache=True)
+        logits, (ids, hidden, mask, caches) = self.forward(input_ids, attention_mask, cache=True)
         loss, grad = softmax_cross_entropy(logits, target, self.pad_id if self.task == "text-generation" else None)
-        self.tok_emb.grad.fill(0); self.pos_emb.grad.fill(0)
+        for parameter in self.parameters():
+            parameter.grad.fill(0)
+        self.head_bias.grad[...] = grad.reshape(-1, grad.shape[-1]).sum(axis=0)
         if self.task == "text-generation":
             flat_h, flat_g = hidden.reshape(-1, hidden.shape[-1]), grad.reshape(-1, grad.shape[-1])
-            np.add.at(self.tok_emb.grad, ids.reshape(-1), flat_g @ self.tok_emb.data)
             self.tok_emb.grad[...] += flat_g.T @ flat_h
             dh = (flat_g @ self.tok_emb.data).reshape(hidden.shape)
         else:
@@ -58,13 +146,11 @@ class TinyTransformer(Module):
             self.head_bias.grad[...] = grad.sum(0)
             dh = (grad @ self.head_weight.data.T)[:, None, :] * valid_mask[:, :, None]
             dh /= np.maximum(valid_mask.sum(1, keepdims=True)[:, :, None], 1)
-        dz = dh * (1 - hidden * hidden)
-        inputs = self.tok_emb.data[ids] + self.pos_emb.data[np.arange(ids.shape[1])]
-        self.proj.grad[...] = inputs.reshape(-1, inputs.shape[-1]).T @ dz.reshape(-1, dz.shape[-1])
-        self.proj_bias.grad[...] = dz.sum((0, 1))
-        base = dz @ self.proj.data.T
-        np.add.at(self.tok_emb.grad, ids.reshape(-1), base.reshape(-1, base.shape[-1]))
-        for i in range(ids.shape[1]): self.pos_emb.grad[i] += base[:, i].sum(0)
+        for block, block_cache in zip(self.blocks[::-1], caches[::-1]):
+            dh = block.backward(dh, block_cache)
+        self.pos_emb.grad.fill(0)
+        np.add.at(self.tok_emb.grad, ids.reshape(-1), dh.reshape(-1, dh.shape[-1]))
+        for i in range(ids.shape[1]): self.pos_emb.grad[i] = dh[:, i].sum(0)
         return loss
 
     def generate(self, input_ids, max_new_tokens, temperature=.8, top_k=40, eos_id: Optional[int] = None):
