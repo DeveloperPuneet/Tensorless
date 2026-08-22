@@ -54,8 +54,8 @@ defaults.
 
 | Field | Default | Description |
 |---|---|---|
-| `device` | auto (`tpu` > `cuda` > `mps` > `cpu`) | Force a specific device |
-| `precision` | auto | `"fp32"`, `"fp16"`, or `"bf16"` |
+| `device` | auto (`tpu` > `cuda` > `mps` > `cpu`) | Force a specific device; accelerator backends require their optional package |
+| `precision` | auto | `"fp32"`, `"fp16"`, or `"bf16"`; JAX accelerator transformers use the selected dtype and compute loss in fp32 |
 
 ## Checkpointing
 

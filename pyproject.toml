@@ -16,6 +16,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+jax = ["jax>=0.4.30"]
+cuda = ["jax[cuda12]>=0.4.30"]
+tpu = ["jax[tpu]>=0.4.30"]
+mps = ["mlx>=0.18"]
+accelerators = ["jax[cuda12]>=0.4.30", "jax[tpu]>=0.4.30", "mlx>=0.18"]
 
 [project.scripts]
 tensorless = "tensorless.cli.main:main"

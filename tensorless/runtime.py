@@ -44,7 +44,13 @@ class LoadedModel:
         device_name = device or self.config.get("device", "cpu")
         self.device = get_device(device_name)
 
-        self.model = build_model(self.task, self.model_type, self.config, self.meta)
+        backend = "numpy"
+        if self.model_type == "transformer" and self.task in ("text-generation", "text-classification"):
+            if self.device in ("cuda", "tpu"):
+                backend = "jax"
+            elif self.device == "mps":
+                backend = "mlx"
+        self.model = build_model(self.task, self.model_type, self.config, self.meta, backend=backend)
         self.model.load_state_dict(payload["model_state_dict"])
         self.model.eval()
 

@@ -96,6 +96,7 @@ class TinyTransformer(Module):
                  task="text-generation", n_classes=0, pad_id=0):
         self.training = True
         self.task, self.max_seq_len, self.pad_id = task, max_seq_len, pad_id
+        self.d_model = d_model
         rng = np.random.default_rng()
         self.tok_emb = Parameter(rng.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
         self.pos_emb = Parameter(rng.normal(0, .02, (max_seq_len, d_model)).astype(np.float32))

@@ -36,8 +36,11 @@ tensorless/
 │   └── manager.py                      CheckpointManager: atomic save/load/clear
 ├── serialization/
 │   └── tl_format.py                     save_tl/load_tl: the .tl file format
+├── backends/
+│   ├── jax_backend.py                    optional CUDA/TPU transformer backend
+│   └── mlx_backend.py                    optional Apple Silicon MPS backend
 ├── devices/
-│   └── device.py                         native CPU device resolution
+│   └── device.py                         accelerator detection and resolution
 └── cli/
     └── main.py                            argparse-based CLI
 ```
@@ -60,7 +63,7 @@ auto.config.resolve_config(ds, TrainConfig) -> ResolvedConfig (every field concr
 training.data_prep.prepare_*(ds, cfg)   -> PreparedData (train/val DataLoaders,
   │                                          meta, tokenizer/preprocessor)
   ▼
-models.registry.build_model(task, model_type, cfg, meta) -> nn.Module
+  models.registry.build_model(task, model_type, cfg, meta) -> native/backend model
   │
   ▼
 training.trainer.run_training(...)      -> trains, checkpoints periodically,
@@ -120,7 +123,10 @@ for the new extension, producing a `Dataset` with the appropriate `kind`.
 ### Adding a new backend/device
 
 Extend `devices/device.py`'s `_*_available()` checks and
-`auto_select_device()` / `get_torch_device()`.
+`auto_select_device()` / `get_device()`. Add a lazy-imported backend module
+and select it in `models/registry.py`, `training/trainer.py`, and
+`runtime.py`. Backend models must expose the native `state_dict()` contract so
+`.tl` files remain portable.
 
 See [contributing.md](contributing.md) for the contribution process
 itself (tests, PRs, etc).

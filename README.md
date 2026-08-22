@@ -1,6 +1,8 @@
 # Tensorless
 
-Tensorless trains small native NumPy models with sensible defaults. It supports
+Tensorless trains small custom models with sensible defaults. It uses a native
+NumPy engine on CPU and optional JAX or MLX backends for accelerator execution.
+It supports
 text generation, text classification, tabular classification, and regression.
 
 ## Install
@@ -8,6 +10,17 @@ text generation, text classification, tabular classification, and regression.
 ```bash
 pip install -e .
 ```
+
+Optional accelerator backends:
+
+```bash
+pip install -e '.[cuda]'   # JAX CUDA
+pip install -e '.[tpu]'    # JAX TPU
+pip install -e '.[mps]'    # Apple Silicon MLX
+```
+
+CUDA and TPU backends currently accelerate transformer text tasks. Tabular
+tasks and unsupported platforms use the native CPU engine.
 
 ## Train on your data
 

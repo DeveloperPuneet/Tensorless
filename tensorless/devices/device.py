@@ -13,18 +13,32 @@ from typing import Optional, Tuple
 
 
 def _tpu_available() -> bool:
-    return False
+    try:
+        import jax
+        return any(device.platform == "tpu" for device in jax.devices())
+    except (ImportError, RuntimeError):
+        return False
 
 
 def _cuda_available() -> bool:
-    return False
+    try:
+        import jax
+        return any(device.platform == "gpu" for device in jax.devices())
+    except (ImportError, RuntimeError):
+        return False
 
 
 def _mps_available() -> bool:
-    return False
+    try:
+        import mlx.core as mx
+        mx.array(0).item()
+        return True
+    except (ImportError, RuntimeError):
+        return False
 
 
 def _cuda_supports_bf16() -> bool:
+    """Use the conservative CUDA default unless hardware is identified."""
     return False
 
 
@@ -70,7 +84,17 @@ def auto_select_device(user_device: Optional[str], user_precision: Optional[str]
 
 
 def get_device(device: str) -> str:
-    """Return the native engine device name (currently CPU only)."""
+    """Return the selected usable device for the native backend."""
+    if device == "mps" and _mps_available():
+        return "mps"
+    if device in ("cuda", "tpu"):
+        try:
+            import jax
+            platform = "gpu" if device == "cuda" else device
+            if any(d.platform == platform for d in jax.devices()):
+                return device
+        except (ImportError, RuntimeError):
+            pass
     return "cpu"
 
 

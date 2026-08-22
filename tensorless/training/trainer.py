@@ -64,7 +64,13 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
     elif task == "text-classification": prepared = dp.prepare_text_classification(ds, cfg, tokenizer=tokenizer, classes=resume_state["meta"]["classes"] if resume_state else None)
     elif task in ("classification", "regression"): prepared = dp.prepare_tabular(ds, cfg, task, preprocessor)
     else: raise ValueError(f"Unsupported task '{task}'")
-    model = build_model(task, model_type, cfg, prepared.meta)
+    backend = "numpy"
+    if model_type == "transformer" and task in ("text-generation", "text-classification"):
+        if device in ("cuda", "tpu"):
+            backend = "jax"
+        elif device == "mps":
+            backend = "mlx"
+    model = build_model(task, model_type, cfg, prepared.meta, backend=backend)
     optimizer = _build_optimizer(model, cfg)
     total_steps = cfg.get("max_steps") or max(1, len(prepared.train_loader)) * cfg["epochs"]
     scheduler = LambdaScheduler(optimizer, cfg["warmup_steps"], total_steps)

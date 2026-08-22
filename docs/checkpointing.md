@@ -12,6 +12,7 @@ create or manage this directory yourself.
 `checkpoint.pt`, containing:
 
 - `model_state_dict` — model weights
+- `best_model_state_dict` — best validation weights, when validation is enabled
 - `optimizer_state_dict` — optimizer momentum/variance buffers
 - `scheduler_state_dict` — learning rate schedule position
 - `epoch`, `global_step` — where training left off
@@ -39,6 +40,11 @@ fingerprint-identical to what was originally used.
 Writes are atomic: Tensorless writes to a temporary file in the same
 directory and renames it into place, so a crash mid-write never leaves a
 corrupt checkpoint that would block resumption.
+
+JAX and MLX accelerator arrays are converted to portable NumPy arrays before
+they enter a `.tl` file or checkpoint. This keeps models loadable on a CPU
+machine. Large-model sharding is not implemented yet; checkpoints are still
+single-file native state snapshots.
 
 When loading `.tl` files, Tensorless fills compatible fields introduced by
 older versions with safe defaults. Files created by a newer unsupported format

@@ -16,7 +16,7 @@ from .mlp import TabularMLP
 from ..errors import ModelError
 
 
-def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str, Any]):
+def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str, Any], backend: str = "numpy"):
     """Build a fresh, randomly-initialized model.
 
     `cfg` is the resolved training config (dict). `meta` carries
@@ -25,7 +25,14 @@ def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str,
       - tabular tasks: {"n_numeric": int, "categorical_vocab_sizes": [...], "n_classes": int}
     """
     if model_type == "transformer":
-        return TinyTransformer(
+        model_class = TinyTransformer
+        if backend == "jax":
+            from ..backends.jax_backend import JaxTinyTransformer
+            model_class = JaxTinyTransformer
+        elif backend == "mlx":
+            from ..backends.mlx_backend import MlxTinyTransformer
+            model_class = MlxTinyTransformer
+        model_kwargs = dict(
             vocab_size=meta["vocab_size"],
             d_model=cfg["d_model"],
             layers=cfg["layers"],
@@ -37,6 +44,9 @@ def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str,
             n_classes=meta.get("n_classes", 0),
             pad_id=meta.get("pad_id", 0),
         )
+        if backend == "jax":
+            model_kwargs["precision"] = cfg.get("precision", "fp32")
+        return model_class(**model_kwargs)
     elif model_type == "mlp":
         return TabularMLP(
             n_numeric=meta["n_numeric"],
