@@ -11,8 +11,7 @@ import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
-from torch.utils.data import DataLoader, Dataset as TorchDataset, IterableDataset
+import numpy as np
 
 from ..data.loader import Dataset
 from ..data.tabular import TabularPreprocessor
@@ -24,14 +23,37 @@ from ..errors import DataError
 
 @dataclass
 class PreparedData:
-    train_loader: DataLoader
-    val_loader: Optional[DataLoader]
+    train_loader: "BatchLoader"
+    val_loader: Optional["BatchLoader"]
     meta: Dict[str, Any]
     tokenizer: Optional[CharTokenizer] = None
     preprocessor: Optional[TabularPreprocessor] = None
 
 
-class _StreamingLMChunkDataset(IterableDataset):
+class BatchLoader:
+    def __init__(self, dataset, batch_size, shuffle=False):
+        self.dataset, self.batch_size, self.shuffle = dataset, batch_size, shuffle
+    def __len__(self):
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+    def __iter__(self):
+        if not hasattr(self.dataset, "__getitem__"):
+            batch = []
+            for value in self.dataset:
+                batch.append(value)
+                if len(batch) == self.batch_size:
+                    yield tuple(np.stack(items) for items in zip(*batch))
+                    batch = []
+            if batch:
+                yield tuple(np.stack(items) for items in zip(*batch))
+            return
+        indices = list(range(len(self.dataset)))
+        if self.shuffle: random.Random().shuffle(indices)
+        for start in range(0, len(indices), self.batch_size):
+            values = [self.dataset[i] for i in indices[start:start + self.batch_size]]
+            yield tuple(np.stack(items) for items in zip(*values))
+
+
+class _StreamingLMChunkDataset:
     """Tokenize text lazily and yield fixed-size language-model batches."""
 
     def __init__(self, texts: List[str], tokenizer, block_size: int):
@@ -57,12 +79,12 @@ class _StreamingLMChunkDataset(IterableDataset):
                 if len(chunk) != self.block_size + 1:
                     continue
                 yield (
-                    torch.tensor(chunk[:-1], dtype=torch.long),
-                    torch.tensor(chunk[1:], dtype=torch.long),
+                    np.asarray(chunk[:-1], dtype=np.int64),
+                    np.asarray(chunk[1:], dtype=np.int64),
                 )
 
 
-class _ClsTextDataset(TorchDataset):
+class _ClsTextDataset:
     def __init__(self, input_ids: List[List[int]], attn_masks: List[List[int]], labels: List[int]):
         self.input_ids = input_ids
         self.attn_masks = attn_masks
@@ -73,14 +95,14 @@ class _ClsTextDataset(TorchDataset):
 
     def __getitem__(self, idx: int):
         return (
-            torch.tensor(self.input_ids[idx], dtype=torch.long),
-            torch.tensor(self.attn_masks[idx], dtype=torch.long),
-            torch.tensor(self.labels[idx], dtype=torch.long),
+            np.asarray(self.input_ids[idx], dtype=np.int64),
+            np.asarray(self.attn_masks[idx], dtype=np.float32),
+            np.asarray(self.labels[idx], dtype=np.int64),
         )
 
 
-class _TabularDataset(TorchDataset):
-    def __init__(self, numeric: torch.Tensor, categorical: torch.Tensor, target: torch.Tensor):
+class _TabularDataset:
+    def __init__(self, numeric, categorical, target):
         self.numeric = numeric
         self.categorical = categorical
         self.target = target
@@ -131,15 +153,13 @@ def prepare_text_generation(
         train_texts, val_texts = ds.texts, None
 
     train_ds = _StreamingLMChunkDataset(train_texts, tokenizer, block_size)
-    train_loader = DataLoader(
-        train_ds, batch_size=cfg["batch_size"], shuffle=False, drop_last=False
-    )
+    train_loader = BatchLoader(train_ds, cfg["batch_size"])
 
     val_loader = None
     if val_texts is not None:
         val_ds = _StreamingLMChunkDataset(val_texts, tokenizer, block_size)
         if len(val_ds) > 0:
-            val_loader = DataLoader(val_ds, batch_size=cfg["batch_size"], shuffle=False)
+            val_loader = BatchLoader(val_ds, cfg["batch_size"])
 
     meta = {
         "vocab_size": tokenizer.vocab_size,
@@ -182,9 +202,9 @@ def prepare_text_classification(
             [labels[i] for i in indices],
         )
 
-    train_loader = DataLoader(subset(train_idx), batch_size=cfg["batch_size"], shuffle=True)
+    train_loader = BatchLoader(subset(train_idx), cfg["batch_size"], shuffle=True)
     val_loader = (
-        DataLoader(subset(val_idx), batch_size=cfg["batch_size"], shuffle=False) if val_idx else None
+        BatchLoader(subset(val_idx), cfg["batch_size"]) if val_idx else None
     )
 
     meta = {
@@ -211,24 +231,21 @@ def prepare_tabular(
 
     n = transformed["numeric"].shape[0]
     train_idx, val_idx = _split_indices(n, cfg["val_split"], cfg["seed"])
-    train_idx_t = torch.tensor(train_idx, dtype=torch.long)
-
     train_ds = _TabularDataset(
-        transformed["numeric"][train_idx_t],
-        transformed["categorical"][train_idx_t],
-        transformed["target"][train_idx_t],
+        transformed["numeric"][train_idx],
+        transformed["categorical"][train_idx],
+        transformed["target"][train_idx],
     )
-    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True)
+    train_loader = BatchLoader(train_ds, cfg["batch_size"], shuffle=True)
 
     val_loader = None
     if val_idx:
-        val_idx_t = torch.tensor(val_idx, dtype=torch.long)
         val_ds = _TabularDataset(
-            transformed["numeric"][val_idx_t],
-            transformed["categorical"][val_idx_t],
-            transformed["target"][val_idx_t],
+            transformed["numeric"][val_idx],
+            transformed["categorical"][val_idx],
+            transformed["target"][val_idx],
         )
-        val_loader = DataLoader(val_ds, batch_size=cfg["batch_size"], shuffle=False)
+        val_loader = BatchLoader(val_ds, cfg["batch_size"])
 
     meta = {
         "n_numeric": len(prep.numeric_columns),

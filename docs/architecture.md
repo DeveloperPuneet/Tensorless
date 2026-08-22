@@ -37,7 +37,7 @@ tensorless/
 ├── serialization/
 │   └── tl_format.py                     save_tl/load_tl: the .tl file format
 ├── devices/
-│   └── device.py                         hardware auto-detection + torch.device resolution
+│   └── device.py                         native CPU device resolution
 └── cli/
     └── main.py                            argparse-based CLI
 ```

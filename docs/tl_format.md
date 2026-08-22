@@ -6,9 +6,9 @@ original training data or code beyond having Tensorless installed.
 
 ## Structure
 
-Under the hood, `.tl` is a `torch.save`/`torch.load`-compatible pickle
-archive (see `tensorless/serialization/tl_format.py`) containing a
-dictionary:
+Under the hood, `.tl` is a portable Python pickle file written by the native
+Tensorless serializer (see `tensorless/serialization/tl_format.py`) containing
+a dictionary:
 
 ```python
 {
@@ -18,7 +18,7 @@ dictionary:
     "model_type": "transformer",       # or mlp
     "config": { ... },                  # full resolved TrainConfig used
     "meta": { ... },                    # vocab_size / n_classes / column info -- whatever the model needs to rebuild
-    "model_state_dict": { ... },        # PyTorch model weights
+   "model_state_dict": { ... },        # native NumPy model weights
     "tokenizer_state": { ... } | None,  # CharTokenizer vocab, for text tasks
     "preprocessor_state": { ... } | None,  # TabularPreprocessor state, for tabular tasks
     "dataset_fingerprint": "...",       # fingerprint of the training dataset

@@ -29,7 +29,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-import torch
+import pickle
 
 from .._version import __version__, TL_FORMAT_VERSION
 from ..errors import SerializationError
@@ -81,7 +81,8 @@ def save_tl(path: str, payload: Dict[str, Any]) -> None:
 
     tmp_path = path + ".tmp"
     try:
-        torch.save(payload, tmp_path)
+        with open(tmp_path, "wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(tmp_path, path)
     except Exception as e:
         if os.path.exists(tmp_path):
@@ -93,7 +94,8 @@ def load_tl(path: str, map_location: str = "cpu") -> Dict[str, Any]:
     if not os.path.isfile(path):
         raise SerializationError(f"'{path}' does not exist.")
     try:
-        payload = torch.load(path, map_location=map_location, weights_only=False)
+        with open(path, "rb") as handle:
+            payload = pickle.load(handle)
     except Exception as e:
         raise SerializationError(f"Failed to read .tl file '{path}': {e}") from e
 

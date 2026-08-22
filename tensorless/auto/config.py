@@ -115,7 +115,7 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
         tokenizer=tokenizer,
         bpe_vocab_size=user.bpe_vocab_size if user.bpe_vocab_size is not None else _auto_vocab_size(ds),
         optimizer=user.optimizer or "adamw",
-        learning_rate=user.learning_rate or (3e-4 if model_type == "transformer" else 1e-3),
+        learning_rate=user.learning_rate or (3e-3 if task == "text-classification" else (3e-4 if model_type == "transformer" else 1e-3)),
         weight_decay=user.weight_decay if user.weight_decay is not None else 0.01,
         batch_size=user.batch_size if user.batch_size is not None else _auto_batch_size(n, max_seq_len),
         epochs=user.epochs or _auto_epochs(n),

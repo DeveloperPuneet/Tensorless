@@ -13,12 +13,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Union
 
-import torch
+import numpy as np
 
 from .models.registry import build_model
 from .tokenization import tokenizer_from_state_dict
 from .data.tabular import TabularPreprocessor
-from .devices.device import get_torch_device
+from .devices.device import get_device
 from .errors import ModelError
 from .serialization.tl_format import load_tl
 
@@ -42,11 +42,10 @@ class LoadedModel:
             self.preprocessor = TabularPreprocessor.from_state_dict(payload["preprocessor_state"])
 
         device_name = device or self.config.get("device", "cpu")
-        self.device = get_torch_device(device_name)
+        self.device = get_device(device_name)
 
         self.model = build_model(self.task, self.model_type, self.config, self.meta)
         self.model.load_state_dict(payload["model_state_dict"])
-        self.model.to(self.device)
         self.model.eval()
 
     # ------------------------------------------------------------------
@@ -58,7 +57,7 @@ class LoadedModel:
         ids = self.tokenizer.encode(prompt, add_special_tokens=True)[:-1]  # drop trailing eos
         if not ids:
             ids = [self.tokenizer.bos_id]
-        input_ids = torch.tensor([ids], dtype=torch.long, device=self.device)
+        input_ids = np.asarray([ids], dtype=np.int64)
         out = self.model.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
@@ -99,11 +98,10 @@ class LoadedModel:
                 mask = mask + [0] * pad_len
             batch_ids.append(ids)
             batch_mask.append(mask)
-        input_ids = torch.tensor(batch_ids, dtype=torch.long, device=self.device)
-        attn_mask = torch.tensor(batch_mask, dtype=torch.long, device=self.device)
-        with torch.no_grad():
-            logits = self.model(input_ids, attention_mask=attn_mask)
-        pred_idx = logits.argmax(dim=-1).tolist()
+        input_ids = np.asarray(batch_ids, dtype=np.int64)
+        attn_mask = np.asarray(batch_mask, dtype=np.float32)
+        logits = self.model.forward(input_ids, attention_mask=attn_mask)
+        pred_idx = logits.argmax(axis=-1).tolist()
         classes = self.meta["classes"]
         return [classes[i] for i in pred_idx]
 
@@ -112,12 +110,11 @@ class LoadedModel:
     # ------------------------------------------------------------------
     def _predict_tabular(self, records: List[Dict[str, Any]]) -> List[Any]:
         transformed = self.preprocessor.transform(records, with_target=False)
-        numeric = transformed["numeric"].to(self.device)
-        categorical = transformed["categorical"].to(self.device)
-        with torch.no_grad():
-            out = self.model(numeric, categorical)
+        numeric = transformed["numeric"]
+        categorical = transformed["categorical"]
+        out = self.model.forward(numeric, categorical)
         if self.task == "classification":
-            pred_idx = out.argmax(dim=-1)
+            pred_idx = out.argmax(axis=-1)
             return self.preprocessor.inverse_target(pred_idx)
         else:
             return self.preprocessor.inverse_target(out)

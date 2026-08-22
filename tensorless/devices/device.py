@@ -11,37 +11,21 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-import torch
-
 
 def _tpu_available() -> bool:
-    try:
-        import torch_xla.core.xla_model as xm  # noqa: F401
-
-        return True
-    except Exception:
-        return False
+    return False
 
 
 def _cuda_available() -> bool:
-    try:
-        return torch.cuda.is_available() and torch.cuda.device_count() > 0
-    except Exception:
-        return False
+    return False
 
 
 def _mps_available() -> bool:
-    try:
-        return torch.backends.mps.is_available()
-    except Exception:
-        return False
+    return False
 
 
 def _cuda_supports_bf16() -> bool:
-    try:
-        return torch.cuda.is_bf16_supported()
-    except Exception:
-        return False
+    return False
 
 
 def auto_select_device(user_device: Optional[str], user_precision: Optional[str]) -> Tuple[str, str]:
@@ -85,23 +69,8 @@ def auto_select_device(user_device: Optional[str], user_precision: Optional[str]
     return device, precision
 
 
-def get_torch_device(device: str) -> torch.device:
-    """Convert our string device name into a torch.device, with a
-    runtime fallback to CPU if the requested backend is unavailable.
-    """
-    try:
-        if device == "tpu":
-            import torch_xla.core.xla_model as xm
+def get_device(device: str) -> str:
+    """Return the native engine device name (currently CPU only)."""
+    return "cpu"
 
-            return xm.xla_device()
-        if device == "cuda":
-            if not _cuda_available():
-                return torch.device("cpu")
-            return torch.device("cuda")
-        if device == "mps":
-            if not _mps_available():
-                return torch.device("cpu")
-            return torch.device("mps")
-        return torch.device("cpu")
-    except Exception:
-        return torch.device("cpu")
+

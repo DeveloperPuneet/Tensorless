@@ -1,4 +1,5 @@
 import os
+import pickle
 
 import tensorless as tl
 from tensorless.serialization.tl_format import save_tl, load_tl
@@ -34,10 +35,10 @@ def test_tl_corrupt_file_raises(workdir):
 
 def test_tl_missing_required_fields_raises(workdir):
     import pytest
-    import torch
 
     path = "incomplete.tl"
-    torch.save({"task": "text-generation"}, path)
+    with open(path, "wb") as handle:
+        pickle.dump({"task": "text-generation"}, handle)
     with pytest.raises(SerializationError):
         load_tl(path)
 
@@ -50,20 +51,16 @@ def test_model_is_single_portable_file(text_corpus, workdir):
 
 
 def test_legacy_tl_payload_is_migrated(workdir):
-    import torch
-
     path = "legacy.tl"
-    torch.save(
-        {
+    with open(path, "wb") as handle:
+        pickle.dump({
             "tl_format_version": 1,
             "task": "text-generation",
             "model_type": "transformer",
             "config": {},
             "meta": {},
             "model_state_dict": {},
-        },
-        path,
-    )
+        }, handle)
     payload = load_tl(path)
     assert payload["training_complete"] is True
     assert payload["metrics"] == {}
@@ -73,19 +70,16 @@ def test_legacy_tl_payload_is_migrated(workdir):
 
 def test_tl_invalid_version_raises(workdir):
     import pytest
-    import torch
 
     path = "invalid-version.tl"
-    torch.save(
-        {
+    with open(path, "wb") as handle:
+        pickle.dump({
             "tl_format_version": "one",
             "task": "text-generation",
             "model_type": "transformer",
             "config": {},
             "meta": {},
             "model_state_dict": {},
-        },
-        path,
-    )
+        }, handle)
     with pytest.raises(SerializationError, match="invalid .tl format version"):
         load_tl(path)

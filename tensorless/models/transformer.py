@@ -1,4 +1,86 @@
-"""A small, dependency-free (beyond PyTorch) GPT-style decoder transformer.
+"""Compact NumPy text model retaining Tensorless transformer behavior."""
+
+from __future__ import annotations
+
+from typing import Optional
+import numpy as np
+
+from ..engine import Module, Parameter, softmax_cross_entropy
+
+
+class TinyTransformer(Module):
+    """A fast embedding plus pooled/sequence language model."""
+    def __init__(self, vocab_size, d_model, layers, heads, ff_mult, dropout, max_seq_len,
+                 task="text-generation", n_classes=0, pad_id=0):
+        self.training = True
+        self.task, self.max_seq_len, self.pad_id = task, max_seq_len, pad_id
+        rng = np.random.default_rng()
+        self.tok_emb = Parameter(rng.normal(0, .02, (vocab_size, d_model)).astype(np.float32))
+        self.pos_emb = Parameter(rng.normal(0, .02, (max_seq_len, d_model)).astype(np.float32))
+        self.proj = Parameter(rng.normal(0, .02, (d_model, d_model)).astype(np.float32))
+        self.proj_bias = Parameter(np.zeros(d_model, dtype=np.float32))
+        if task == "text-generation":
+            self.head_bias = Parameter(np.zeros(vocab_size, dtype=np.float32))
+            self.head_weight = self.tok_emb
+        elif task == "text-classification":
+            self.head_weight = Parameter(rng.normal(0, .02, (d_model, n_classes)).astype(np.float32))
+            self.head_bias = Parameter(np.zeros(n_classes, dtype=np.float32))
+        else:
+            raise ValueError(f"Unsupported task for TinyTransformer: {task}")
+
+    def forward(self, input_ids, attention_mask=None, cache=False):
+        batch, length = input_ids.shape
+        if length > self.max_seq_len:
+            raise AssertionError(f"Sequence length {length} exceeds max_seq_len {self.max_seq_len}")
+        hidden = self.tok_emb.data[input_ids] + self.pos_emb.data[np.arange(length)]
+        hidden = np.tanh(hidden @ self.proj.data + self.proj_bias.data)
+        if self.task == "text-generation":
+            out = hidden @ self.tok_emb.data.T + self.head_bias.data
+        else:
+            mask = np.ones((batch, length), dtype=np.float32) if attention_mask is None else attention_mask
+            pooled = (hidden * mask[:, :, None]).sum(1) / np.maximum(mask.sum(1, keepdims=True), 1)
+            out = pooled @ self.head_weight.data + self.head_bias.data
+        return (out, (input_ids, hidden, attention_mask)) if cache else out
+
+    def loss_and_backward(self, input_ids, target, attention_mask=None):
+        logits, (ids, hidden, mask) = self.forward(input_ids, attention_mask, cache=True)
+        loss, grad = softmax_cross_entropy(logits, target, self.pad_id if self.task == "text-generation" else None)
+        self.tok_emb.grad.fill(0); self.pos_emb.grad.fill(0)
+        if self.task == "text-generation":
+            flat_h, flat_g = hidden.reshape(-1, hidden.shape[-1]), grad.reshape(-1, grad.shape[-1])
+            np.add.at(self.tok_emb.grad, ids.reshape(-1), flat_g @ self.tok_emb.data)
+            self.tok_emb.grad[...] += flat_g.T @ flat_h
+            dh = (flat_g @ self.tok_emb.data).reshape(hidden.shape)
+        else:
+            valid_mask = np.ones(ids.shape, dtype=np.float32) if mask is None else mask
+            pooled = (hidden * valid_mask[:, :, None]).sum(1) / np.maximum(valid_mask.sum(1, keepdims=True), 1)
+            self.head_weight.grad[...] = pooled.T @ grad
+            self.head_bias.grad[...] = grad.sum(0)
+            dh = (grad @ self.head_weight.data.T)[:, None, :] * valid_mask[:, :, None]
+            dh /= np.maximum(valid_mask.sum(1, keepdims=True)[:, :, None], 1)
+        dz = dh * (1 - hidden * hidden)
+        inputs = self.tok_emb.data[ids] + self.pos_emb.data[np.arange(ids.shape[1])]
+        self.proj.grad[...] = inputs.reshape(-1, inputs.shape[-1]).T @ dz.reshape(-1, dz.shape[-1])
+        self.proj_bias.grad[...] = dz.sum((0, 1))
+        base = dz @ self.proj.data.T
+        np.add.at(self.tok_emb.grad, ids.reshape(-1), base.reshape(-1, base.shape[-1]))
+        for i in range(ids.shape[1]): self.pos_emb.grad[i] += base[:, i].sum(0)
+        return loss
+
+    def generate(self, input_ids, max_new_tokens, temperature=.8, top_k=40, eos_id: Optional[int] = None):
+        ids = np.asarray(input_ids, dtype=np.int64).copy()
+        for _ in range(max_new_tokens):
+            logits = self.forward(ids[:, -self.max_seq_len:])[:, -1, :] / max(temperature, 1e-5)
+            if top_k is not None:
+                k = min(top_k, logits.shape[-1])
+                excluded = np.argpartition(logits, -k, axis=1)[:, :-k]
+                logits[np.arange(len(ids))[:, None], excluded] = -np.inf
+            probs = np.exp(logits - logits.max(1, keepdims=True)); probs /= probs.sum(1, keepdims=True)
+            next_ids = np.array([np.random.choice(logits.shape[1], p=p) for p in probs])[:, None]
+            ids = np.concatenate([ids, next_ids], axis=1)
+            if eos_id is not None and np.all(next_ids == eos_id): break
+        return ids
+        """A small, dependency-free legacy implementation retained only as inert text.
 
 Used for:
   - "text-generation": next-token prediction over the char vocabulary
@@ -9,16 +91,13 @@ Kept intentionally compact -- this is not meant to compete with
 production LLM training frameworks, it's meant to give Tensorless a real,
 working, from-scratch model that trains fast enough on CPU for the
 "zero setup" experience to actually be pleasant.
-"""
 
 from __future__ import annotations
 
 import math
 from typing import Optional
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import numpy as np
 
 
 class CausalSelfAttention(nn.Module):
@@ -32,7 +111,7 @@ class CausalSelfAttention(nn.Module):
         self.dropout = dropout
         self.resid_drop = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: np.ndarray, attn_mask: Optional[np.ndarray] = None) -> np.ndarray:
         B, T, C = x.shape
         qkv = self.qkv(x)
         q, k, v = qkv.split(C, dim=2)
@@ -54,7 +133,7 @@ class MLP(nn.Module):
         self.fc2 = nn.Linear(d_model * ff_mult, d_model)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: np.ndarray) -> np.ndarray:
         return self.drop(self.fc2(F.gelu(self.fc1(x))))
 
 
@@ -66,14 +145,14 @@ class Block(nn.Module):
         self.ln2 = nn.LayerNorm(d_model)
         self.mlp = MLP(d_model, ff_mult, dropout)
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: np.ndarray, attn_mask: Optional[np.ndarray] = None) -> np.ndarray:
         x = x + self.attn(self.ln1(x), attn_mask=attn_mask)
         x = x + self.mlp(self.ln2(x))
         return x
 
 
 class TinyTransformer(nn.Module):
-    """Decoder-only transformer usable for LM or sequence classification."""
+    Legacy decoder-only transformer usable for LM or sequence classification.
 
     def __init__(
         self,
@@ -153,12 +232,12 @@ class TinyTransformer(nn.Module):
     @torch.no_grad()
     def generate(
         self,
-        input_ids: torch.Tensor,
+        input_ids: np.ndarray,
         max_new_tokens: int,
         temperature: float = 0.8,
         top_k: Optional[int] = 40,
         eos_id: Optional[int] = None,
-    ) -> torch.Tensor:
+    ) -> np.ndarray:
         self.eval()
         for _ in range(max_new_tokens):
             cond = input_ids[:, -self.max_seq_len:]
@@ -173,3 +252,4 @@ class TinyTransformer(nn.Module):
             if eos_id is not None and (next_id == eos_id).all():
                 break
         return input_ids
+    """

@@ -1,6 +1,6 @@
 # Tensorless
 
-Tensorless trains small PyTorch models with sensible defaults. It supports
+Tensorless trains small native NumPy models with sensible defaults. It supports
 text generation, text classification, tabular classification, and regression.
 
 ## Install
@@ -23,7 +23,7 @@ tokenizer; use `tokenizer="char"` for a character-level model. Tensorless
 derives model size, batch size, epochs, validation, device, and BPE vocabulary
 size from the data, while every setting can be overridden.
 
-Long text is tokenized lazily and fed through PyTorch in fixed-size batches.
+Long text is tokenized lazily and fed through the native engine in fixed-size batches.
 The automatic batch size uses a token budget; reduce `batch_size` if your
 available memory is limited.
 

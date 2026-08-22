@@ -17,7 +17,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
+import numpy as np
 
 _MISSING = "<missing>"
 _UNK = "<unk>"
@@ -132,13 +132,13 @@ class TabularPreprocessor:
 
     def transform(
         self, records: List[Dict[str, Any]], with_target: bool = True
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, np.ndarray]:
         n = len(records)
         num_cols = self.numeric_columns
         cat_cols = self.categorical_columns
 
-        numeric = torch.zeros(n, max(len(num_cols), 1), dtype=torch.float32)
-        categorical = torch.zeros(n, max(len(cat_cols), 1), dtype=torch.long)
+        numeric = np.zeros((n, max(len(num_cols), 1)), dtype=np.float32)
+        categorical = np.zeros((n, max(len(cat_cols), 1)), dtype=np.int64)
 
         for i, r in enumerate(records):
             for j, col in enumerate(num_cols):
@@ -158,14 +158,14 @@ class TabularPreprocessor:
 
         if with_target and self.target_column is not None:
             if self.task == "regression":
-                target = torch.zeros(n, dtype=torch.float32)
+                target = np.zeros(n, dtype=np.float32)
                 for i, r in enumerate(records):
                     v = _try_float(r.get(self.target_column))
                     v = self.target_mean if v is None else v
                     target[i] = (v - self.target_mean) / self.target_std
                 out["target"] = target
             else:
-                target = torch.zeros(n, dtype=torch.long)
+                target = np.zeros(n, dtype=np.int64)
                 for i, r in enumerate(records):
                     raw = str(r.get(self.target_column))
                     idx = self.classes.index(raw) if raw in self.classes else 0
@@ -174,10 +174,10 @@ class TabularPreprocessor:
 
         return out
 
-    def inverse_target(self, values: torch.Tensor) -> List[Any]:
+    def inverse_target(self, values: np.ndarray) -> List[Any]:
         if self.task == "regression":
-            return [(v.item() * self.target_std + self.target_mean) for v in values]
-        return [self.classes[int(v.item())] for v in values]
+            return [float(v * self.target_std + self.target_mean) for v in values]
+        return [self.classes[int(v)] for v in values]
 
     def categorical_vocab_sizes(self) -> List[int]:
         return [len(self.column_stats[c].vocab) for c in self.categorical_columns]

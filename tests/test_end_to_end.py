@@ -1,7 +1,5 @@
 import os
 
-import torch
-
 import tensorless as tl
 from tensorless.devices.device import auto_select_device
 
@@ -42,9 +40,6 @@ def test_device_respects_explicit_cpu_request(text_corpus, workdir):
 
 
 def test_cuda_training_if_available(text_corpus, workdir):
-    if not torch.cuda.is_available():
-        import pytest
+    import pytest
 
-        pytest.skip("CUDA not available in this environment")
-    model = tl.train(text_corpus, out="model.tl", device="cuda", **TINY_TEXT_KWARGS)
-    assert model.config["device"] == "cuda"
+    pytest.skip("The native engine currently provides CPU kernels only")

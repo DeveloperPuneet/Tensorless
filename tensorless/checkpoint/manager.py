@@ -18,7 +18,7 @@ import shutil
 import tempfile
 from typing import Any, Dict, Optional
 
-import torch
+import pickle
 
 from ..errors import CheckpointError
 
@@ -44,7 +44,8 @@ class CheckpointManager:
         fd, tmp_path = tempfile.mkstemp(dir=self.checkpoint_dir, suffix=".tmp")
         os.close(fd)
         try:
-            torch.save(state, tmp_path)
+            with open(tmp_path, "wb") as handle:
+                pickle.dump(state, handle, protocol=pickle.HIGHEST_PROTOCOL)
             shutil.move(tmp_path, self.path)
         except Exception as e:
             if os.path.exists(tmp_path):
@@ -55,7 +56,8 @@ class CheckpointManager:
         if not self.exists():
             raise CheckpointError(f"No checkpoint found at '{self.path}'.")
         try:
-            return torch.load(self.path, map_location=map_location, weights_only=False)
+            with open(self.path, "rb") as handle:
+                return pickle.load(handle)
         except Exception as e:
             raise CheckpointError(
                 f"Checkpoint at '{self.path}' is corrupt or incompatible: {e}"

@@ -59,7 +59,7 @@ Returned by both `train()` and `load()`.
 | `.info()` | all | Dict summary: task, model type, versions, config, metrics, param count |
 
 Attributes: `.task`, `.model_type`, `.config`, `.meta`, `.metrics`,
-`.dataset_fingerprint`, `.model` (the underlying `torch.nn.Module`),
+`.dataset_fingerprint`, `.model` (the underlying native Tensorless model),
 `.tokenizer` (`CharTokenizer` or `None`), `.preprocessor`
 (`TabularPreprocessor` or `None`).
 

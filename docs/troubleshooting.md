@@ -2,11 +2,9 @@
 
 ## Installation issues
 
-**`ModuleNotFoundError: No module named 'torch'`**
-Torch is a dependency and should install automatically with `pip
-install -e .`. If it didn't, install it manually following
-[pytorch.org/get-started](https://pytorch.org/get-started/locally/) for
-your platform, then reinstall Tensorless.
+**`ModuleNotFoundError: No module named 'numpy'`**
+NumPy is installed automatically with `pip install -e .`. If it is missing,
+install it with `python -m pip install numpy`, then reinstall Tensorless.
 
 **`tensorless: command not found` after installing**
 Make sure the Python environment's `bin`/`Scripts` directory is on your
@@ -69,8 +67,8 @@ fingerprint across runs.
 
 **`CheckpointError: Checkpoint at '...' is corrupt or incompatible.`**
 The checkpoint file was likely truncated by an interruption during the
-(non-atomic part of the) write, or created by an incompatible PyTorch
-version. Delete the `.ckpt` directory and retrain — you'll lose progress
+  (non-atomic part of the) write, or created by an incompatible Tensorless
+  version. Delete the `.ckpt` directory and retrain — you'll lose progress
 on the interrupted run, but the checkpoint being unreadable means it
 can't be safely resumed regardless.
 

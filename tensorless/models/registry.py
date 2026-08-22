@@ -11,14 +11,12 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-import torch.nn as nn
-
 from .transformer import TinyTransformer
 from .mlp import TabularMLP
 from ..errors import ModelError
 
 
-def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str, Any]) -> nn.Module:
+def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str, Any]):
     """Build a fresh, randomly-initialized model.
 
     `cfg` is the resolved training config (dict). `meta` carries
