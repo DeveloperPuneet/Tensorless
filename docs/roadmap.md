@@ -5,8 +5,9 @@ a commitment or timeline.
 
 ## Near-term
 
-- **Progress bars** for training (currently plain print-based logging)
-- **Multi-GPU / distributed training** for larger datasets
+- **Hyperparameter search mode**: an opt-in `tl.train("./data",
+  search=True)` that tries a small set of configurations and keeps the
+  best, rather than a single heuristic choice
 
 ## Medium-term
 
@@ -15,18 +16,20 @@ a commitment or timeline.
   from scratch
 - **Additional data formats**: Parquet, Excel (`.xlsx`), image
   directories, audio
-- **Hyperparameter search mode**: an opt-in `tl.train("./data",
-  search=True)` that tries a small set of configurations and keeps the
-  best, rather than a single heuristic choice
 - **Data quality auto-fixes**: currently `tl.inspect()` only *reports*
   problems like missing values or class imbalance; a future mode could
   offer to fix them (with explicit user opt-in, consistent with "never
   silently modify user data")
 
-## Long-term / exploratory
+## Implemented
 
-- **Alternate backends** (JAX, a lightweight NumPy-only backend) behind
-  the same `tl.train()`/`tl.load()` API
+- **Progress bars** for batch and epoch training output
+- **JAX CUDA/TPU backend**, including local and multi-host data parallelism
+- **MLX Apple Silicon backend** for transformer text tasks
+- **NumPy CPU backend** with stacked attention, dropout, gradient checkpointing,
+  and sharded checkpoints
+
+## Long-term / exploratory
 - **Export to other formats** (ONNX, TorchScript) from a `.tl` file for
   deployment outside Python
 
