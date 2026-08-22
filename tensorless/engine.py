@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Dict, Iterable, Iterator
+import math
 import numpy as np
 
 
@@ -226,10 +227,12 @@ class LambdaScheduler:
     def _factor(self, step):
         if self.warmup_steps and step < self.warmup_steps:
             return (step + 1) / self.warmup_steps
-        return max(
-            0.1,
-            1.0 - (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps),
+        progress = min(
+            1.0,
+            max(0.0, (step - self.warmup_steps) /
+                max(1, self.total_steps - self.warmup_steps)),
         )
+        return 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress))
 
     def step(self):
         self.step_count += 1

@@ -109,7 +109,7 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
             if not np.isfinite(last_train_loss):
                 raise FloatingPointError(f"Non-finite training loss at step {global_step + 1}: {last_train_loss}")
             if cfg["grad_clip"]:
-                norm = np.sqrt(sum(float(np.sum(p.grad * p.grad)) for p in model.parameters()))
+                norm = np.sqrt(sum(float(np.sum(p.grad.astype(np.float64) ** 2)) for p in model.parameters()))
                 if not np.isfinite(norm):
                     raise FloatingPointError(f"Non-finite gradient norm at step {global_step + 1}: {norm}")
                 if norm > cfg["grad_clip"]:
