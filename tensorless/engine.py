@@ -188,18 +188,23 @@ class LambdaScheduler:
         self.total_steps = total_steps
         self.step_count = 0
         self.base_lr = optimizer.lr
+        self.optimizer.lr = self.base_lr * self._factor(0)
+
+    def _factor(self, step):
+        if self.warmup_steps and step < self.warmup_steps:
+            return (step + 1) / self.warmup_steps
+        return max(
+            0.1,
+            1.0 - (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps),
+        )
 
     def step(self):
         self.step_count += 1
-        step = self.step_count - 1
-        if self.warmup_steps and step < self.warmup_steps:
-            factor = (step + 1) / self.warmup_steps
-        else:
-            factor = max(0.1, 1.0 - (step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps))
-        self.optimizer.lr = self.base_lr * factor
+        self.optimizer.lr = self.base_lr * self._factor(self.step_count)
 
     def state_dict(self):
         return {"step_count": self.step_count}
 
     def load_state_dict(self, state):
         self.step_count = int(state.get("step_count", 0))
+        self.optimizer.lr = self.base_lr * self._factor(self.step_count)

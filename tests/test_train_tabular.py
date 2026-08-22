@@ -2,6 +2,7 @@ import numpy as np
 import tensorless as tl
 from tensorless.data.tabular import TabularPreprocessor
 from tensorless.training.early_stopping import EarlyStopping
+from tensorless.engine import LambdaScheduler, SGD, Parameter
 
 from .conftest import TINY_TABULAR_KWARGS
 
@@ -27,6 +28,16 @@ def test_training_is_reproducible_with_same_seed(tabular_classification_csv, wor
     }
     for name, parameter in first.model.named_parameters():
         np.testing.assert_array_equal(parameter.data, dict(second.model.named_parameters())[name].data)
+
+
+def test_scheduler_applies_warmup_before_first_update():
+    optimizer = SGD([Parameter([1.0])], lr=1.0)
+    scheduler = LambdaScheduler(optimizer, warmup_steps=4, total_steps=8)
+    assert optimizer.lr == 0.25
+    scheduler.step()
+    assert optimizer.lr == 0.5
+    scheduler.step()
+    assert optimizer.lr == 0.75
 
 
 def test_tabular_classification_learns_signal(tabular_classification_csv, workdir):

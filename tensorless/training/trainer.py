@@ -80,11 +80,12 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
     if resume_state:
         model.load_state_dict(resume_state["model_state_dict"]); optimizer.load_state_dict(resume_state["optimizer_state_dict"]); scheduler.load_state_dict(resume_state["scheduler_state_dict"])
         start_epoch, global_step = resume_state["epoch"], resume_state["global_step"]
+        prepared.train_loader.epoch = resume_state.get("train_loader_epoch", start_epoch)
         early_stopper.best = resume_state.get("early_stopping_best", float("inf")); early_stopper.num_bad_checks = resume_state.get("early_stopping_bad_checks", 0)
         if resume_state.get("best_model_state_dict") is not None:
             best_model_state = resume_state["best_model_state_dict"]
     def checkpoint(epoch, complete):
-        checkpoint_mgr.save({"epoch": epoch, "global_step": global_step, "model_state_dict": model.state_dict(), "best_model_state_dict": best_model_state, "optimizer_state_dict": optimizer.state_dict(), "scheduler_state_dict": scheduler.state_dict(), "early_stopping_best": early_stopper.best, "early_stopping_bad_checks": early_stopper.num_bad_checks, "config": cfg, "meta": prepared.meta, "tokenizer_state": prepared.tokenizer.state_dict() if prepared.tokenizer else None, "preprocessor_state": prepared.preprocessor.state_dict() if prepared.preprocessor else None, "dataset_fingerprint": dataset_fingerprint, "training_complete": complete})
+        checkpoint_mgr.save({"epoch": epoch, "global_step": global_step, "train_loader_epoch": prepared.train_loader.epoch, "model_state_dict": model.state_dict(), "best_model_state_dict": best_model_state, "optimizer_state_dict": optimizer.state_dict(), "scheduler_state_dict": scheduler.state_dict(), "early_stopping_best": early_stopper.best, "early_stopping_bad_checks": early_stopper.num_bad_checks, "config": cfg, "meta": prepared.meta, "tokenizer_state": prepared.tokenizer.state_dict() if prepared.tokenizer else None, "preprocessor_state": prepared.preprocessor.state_dict() if prepared.preprocessor else None, "dataset_fingerprint": dataset_fingerprint, "training_complete": complete})
     last_train_loss = last_val_loss = None
     t0 = time.time(); stop = False
     progress_enabled = cfg["verbose"] and sys.stdout.isatty()

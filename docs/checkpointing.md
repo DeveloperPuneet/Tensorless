@@ -16,6 +16,7 @@ create or manage this directory yourself.
 - `optimizer_state_dict` — optimizer momentum/variance buffers
 - `scheduler_state_dict` — learning rate schedule position
 - `epoch`, `global_step` — where training left off
+- `train_loader_epoch` — deterministic shuffle position for resumed training
 - `early_stopping_best`, `early_stopping_bad_checks` — early stopping state
 - `config` — the fully resolved training configuration used
 - `meta` — task-specific sizing info (vocab size, number of classes, etc.)
