@@ -53,7 +53,14 @@ def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str,
             model_kwargs["gradient_checkpointing"] = cfg.get("gradient_checkpointing", False)
         return model_class(**model_kwargs)
     elif model_type == "mlp":
-        return TabularMLP(
+        model_class = TabularMLP
+        if backend == "jax":
+            from ..backends.jax_backend import JaxTabularMLP
+            model_class = JaxTabularMLP
+        elif backend == "mlx":
+            from ..backends.mlx_backend import MlxTabularMLP
+            model_class = MlxTabularMLP
+        model_kwargs = dict(
             n_numeric=meta["n_numeric"],
             categorical_vocab_sizes=meta["categorical_vocab_sizes"],
             d_model=cfg["d_model"],
@@ -62,5 +69,8 @@ def build_model(task: str, model_type: str, cfg: Dict[str, Any], meta: Dict[str,
             task=task,
             n_classes=meta.get("n_classes", 0),
         )
+        if backend in ("jax", "mlx"):
+            model_kwargs["precision"] = cfg.get("precision", "fp32")
+        return model_class(**model_kwargs)
     else:
         raise ModelError(f"Unknown model_type '{model_type}'.")

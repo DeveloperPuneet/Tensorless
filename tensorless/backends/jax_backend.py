@@ -12,6 +12,7 @@ import os
 import numpy as np
 
 from ..models.transformer import TinyTransformer
+from ..models.mlp import TabularMLP
 
 
 def _jax():
@@ -163,3 +164,75 @@ class JaxTinyTransformer(TinyTransformer):
             if eos_id is not None and np.all(next_ids == eos_id):
                 break
         return ids
+
+
+class JaxTabularMLP(TabularMLP):
+    """The native tabular-MLP parameter layout with JAX math and gradients.
+
+    Used automatically instead of the plain NumPy `TabularMLP` whenever the
+    resolved device is `cuda`/`tpu`, so tabular training actually runs on
+    the detected accelerator instead of silently staying on CPU.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.precision = kwargs.pop("precision", "fp32")
+        super().__init__(*args, **kwargs)
+
+    def _jax_params(self):
+        _, jnp = _jax()
+        dtype = {"fp16": jnp.float16, "bf16": jnp.bfloat16}.get(self.precision, jnp.float32)
+        return {name: jnp.asarray(value.data, dtype=dtype) for name, value in self.named_parameters()}
+
+    def _forward_jax(self, params, numeric, categorical, dropout_masks=None):
+        jax, jnp = _jax()
+        parts = [jnp.asarray(numeric, dtype=jnp.float32)] if self.n_numeric else []
+        categorical = jnp.asarray(categorical, dtype=jnp.int32)
+        for i in range(len(self.embeddings)):
+            parts.append(params[f"embeddings.{i}"][categorical[:, i]])
+        x = jnp.concatenate(parts, axis=1) if parts else jnp.asarray(numeric, dtype=jnp.float32)
+        for i in range(len(self.weights)):
+            preactivation = x @ params[f"weights.{i}"] + params[f"biases.{i}"]
+            x = jax.nn.gelu(preactivation, approximate=True)
+            if dropout_masks is not None and dropout_masks[i] is not None:
+                x = x * dropout_masks[i] / (1.0 - self.dropout)
+        out = x @ params["head_weight"] + params["head_bias"]
+        if self.task == "regression":
+            out = out[:, 0]
+        return out
+
+    def _make_dropout_masks(self, batch_size):
+        if not self.training or self.dropout <= 0:
+            return None
+        _, jnp = _jax()
+        return [
+            jnp.asarray((np.random.random((batch_size, weight.data.shape[1])) >= self.dropout).astype(np.float32))
+            for weight in self.weights
+        ]
+
+    def forward(self, numeric, categorical, cache=False):
+        params = self._jax_params()
+        batch_size = numeric.shape[0] if self.n_numeric else categorical.shape[0]
+        dropout_masks = self._make_dropout_masks(batch_size)
+        out = np.asarray(self._forward_jax(params, numeric, categorical, dropout_masks))
+        return (out, None) if cache else out
+
+    def loss_and_backward(self, numeric, categorical, target):
+        jax, jnp = _jax()
+        params = self._jax_params()
+        batch_size = numeric.shape[0] if self.n_numeric else categorical.shape[0]
+        dropout_masks = self._make_dropout_masks(batch_size)
+        is_regression = self.task == "regression"
+        target_arr = jnp.asarray(target, dtype=jnp.float32 if is_regression else jnp.int32)
+
+        def loss_fn(current):
+            logits = self._forward_jax(current, numeric, categorical, dropout_masks)
+            if is_regression:
+                error = logits - target_arr
+                return jnp.mean(error * error)
+            log_probs = jax.nn.log_softmax(logits, axis=-1)
+            return -jnp.mean(jnp.take_along_axis(log_probs, target_arr[:, None], axis=1))
+
+        loss, gradients = jax.value_and_grad(loss_fn)(params)
+        for name, parameter in self.named_parameters():
+            parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32)
+        return float(loss)

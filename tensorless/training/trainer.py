@@ -66,12 +66,16 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
     elif task == "text-classification": prepared = dp.prepare_text_classification(ds, cfg, tokenizer=tokenizer, classes=resume_state["meta"]["classes"] if resume_state else None)
     elif task in ("classification", "regression"): prepared = dp.prepare_tabular(ds, cfg, task, preprocessor)
     else: raise ValueError(f"Unsupported task '{task}'")
+    # Pick a backend that actually runs on the resolved device. Both model
+    # types (transformer and mlp) have jax/mlx implementations, so whatever
+    # device was auto-detected (or requested) is honored for training --
+    # we don't silently fall back to the NumPy/CPU engine just because the
+    # model happens to be an MLP.
     backend = "numpy"
-    if model_type == "transformer" and task in ("text-generation", "text-classification"):
-        if device in ("cuda", "tpu"):
-            backend = "jax"
-        elif device == "mps":
-            backend = "mlx"
+    if device in ("cuda", "tpu"):
+        backend = "jax"
+    elif device == "mps":
+        backend = "mlx"
     model = build_model(task, model_type, cfg, prepared.meta, backend=backend)
     if pretrained_state is not None:
         try:

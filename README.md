@@ -19,8 +19,11 @@ pip install -e '.[tpu]'    # JAX TPU
 pip install -e '.[mps]'    # Apple Silicon MLX
 ```
 
-CUDA and TPU backends currently accelerate transformer text tasks. Tabular
-tasks and unsupported platforms use the native CPU engine.
+CUDA, TPU, and MPS backends accelerate both transformer text tasks and
+tabular MLP tasks. Whatever device is auto-detected (or passed via
+`device=...`) is what training and inference actually run on; only
+unsupported platforms (no CUDA/TPU/MPS available) fall back to the native
+CPU engine.
 
 ## Train on your data
 
