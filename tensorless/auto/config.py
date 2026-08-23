@@ -125,7 +125,7 @@ def resolve_config(ds: Dataset, user: TrainConfig) -> ResolvedConfig:
         grad_clip=user.grad_clip if user.grad_clip is not None else 1.0,
         warmup_steps=user.warmup_steps if user.warmup_steps is not None else min(100, max(1, n // 10)),
         val_split=user.val_split if user.val_split is not None else (0.1 if n >= 50 else 0.0),
-        patience=user.patience if user.patience is not None else 3,
+        patience=user.patience if user.patience is not None else 5,
         min_delta=user.min_delta if user.min_delta is not None else 1e-4,
         device=device,
         precision=precision,

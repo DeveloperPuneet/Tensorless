@@ -127,9 +127,9 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
             model.eval(); losses = [_compute_loss(task, model_type, model, batch, prepared.meta.get("pad_id", 0), False) for batch in prepared.val_loader]; last_val_loss = sum(losses) / max(1, len(losses))
             if not np.isfinite(last_val_loss):
                 raise FloatingPointError(f"Non-finite validation loss after epoch {epoch + 1}: {last_val_loss}")
-            if last_val_loss < early_stopper.best - early_stopper.min_delta:
-                best_model_state = model.state_dict()
-            early_stopper.step(last_val_loss)
+            improved = early_stopper.step(last_val_loss, model.state_dict())
+            if improved:
+                best_model_state = early_stopper.best_state
             if cfg["verbose"]:
                 log_fn(
                     f"[tensorless] epoch {epoch + 1}/{cfg['epochs']} "

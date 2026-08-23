@@ -23,6 +23,17 @@ def _dropout(value, probability, training):
     return value * keep / (1.0 - probability), keep
 
 
+def _gelu(value):
+    scaled = np.sqrt(2.0 / np.pi) * (value + 0.044715 * value ** 3)
+    return 0.5 * value * (1.0 + np.tanh(scaled))
+
+
+def _gelu_backward(value):
+    scaled = np.sqrt(2.0 / np.pi) * (value + 0.044715 * value ** 3)
+    tanh_scaled = np.tanh(scaled)
+    return 0.5 * (1.0 + tanh_scaled) + 0.5 * value * (1.0 - tanh_scaled ** 2) * np.sqrt(2.0 / np.pi) * (1.0 + 3.0 * 0.044715 * value ** 2)
+
+
 class TransformerBlock(Module):
     def __init__(self, d_model, heads, ff_mult, dropout):
         if d_model % heads:
@@ -65,7 +76,7 @@ class TransformerBlock(Module):
         residual = inputs + attention
         normed2, ln2_cache = layer_norm_forward(residual, self.ln2_gain.data, self.ln2_bias.data)
         ff_pre = normed2 @ self.ff1_weight.data + self.ff1_bias.data
-        ff_hidden = np.maximum(ff_pre, 0)
+        ff_hidden = _gelu(ff_pre)
         ff, ff_keep = _dropout(ff_hidden @ self.ff2_weight.data + self.ff2_bias.data, self.dropout, self.training)
         output = residual + ff
         if not cache:
@@ -80,7 +91,7 @@ class TransformerBlock(Module):
         self.ff2_weight.grad[...] = ff_hidden.reshape(-1, ff_hidden.shape[-1]).T @ gradient_ff.reshape(-1, gradient_ff.shape[-1])
         self.ff2_bias.grad[...] = gradient_ff.sum(axis=(0, 1))
         gradient_hidden = gradient_ff @ self.ff2_weight.data.T
-        gradient_hidden *= ff_pre > 0
+        gradient_hidden *= _gelu_backward(ff_pre)
         self.ff1_weight.grad[...] = normed2.reshape(-1, normed2.shape[-1]).T @ gradient_hidden.reshape(-1, gradient_hidden.shape[-1])
         self.ff1_bias.grad[...] = gradient_hidden.sum(axis=(0, 1))
         gradient_normed2 = gradient_hidden @ self.ff1_weight.data.T

@@ -95,9 +95,10 @@ By default, Tensorless holds out `val_split` of the data (10% for
 datasets with 50+ examples, 0% for smaller ones where a held-out split
 wouldn't be meaningful) and tracks validation loss after each epoch. If
 validation loss doesn't improve by at least `min_delta` for `patience`
-consecutive epochs, training stops early. The automatic default is 3
-consecutive epochs, and the completed model is still written to the `.tl`
-output file.
+consecutive epochs, training stops early. The automatic default is 5
+consecutive epochs. Before the completed model is written to the `.tl` output
+file, Tensorless restores the weights from the epoch with the best validation
+loss. This applies equally to regular training and built-in pretraining.
 
 ## Checkpointing during training
 
