@@ -101,33 +101,61 @@ class JaxTinyTransformer(TinyTransformer):
         return pooled @ params["head_weight"] + params["head_bias"]
 
     def forward(self, input_ids, attention_mask=None, cache=False):
-        _, jnp = _jax()
-        output = self._forward_jax(self._jax_params(), input_ids, attention_mask)
+        params = self._jax_params()
+        output = self._get_forward_jit()(params, input_ids, attention_mask)
         output = np.asarray(output)
         return (output, None) if cache else output
 
-    def loss_and_backward(self, input_ids, target, attention_mask=None):
-        jax, jnp = _jax()
-        params = self._jax_params()
-        target = jnp.asarray(target, dtype=jnp.int32)
+    def _get_forward_jit(self):
+        # Compile once per instance and reuse. Without this, every call
+        # re-traces the whole forward pass in Python and dispatches ops to
+        # the accelerator one at a time -- which shows up as pegged CPU
+        # (tracing/dispatch overhead) with near-zero GPU utilization, even
+        # though the correct device was selected.
+        if getattr(self, "_forward_jit_fn", None) is None:
+            jax, _ = _jax()
+            self._forward_jit_fn = jax.jit(self._forward_jax)
+        return self._forward_jit_fn
 
-        def loss_fn(current, current_ids, current_target, current_mask):
-            forward = jax.checkpoint(self._forward_jax) if self.gradient_checkpointing else self._forward_jax
-            logits = forward(current, current_ids, current_mask)
-            flat_logits = logits.reshape(-1, logits.shape[-1]).astype(jnp.float32)
-            flat_target = current_target.reshape(-1)
-            log_probs = jax.nn.log_softmax(flat_logits, axis=-1)
-            losses = -jnp.take_along_axis(log_probs, flat_target[:, None], axis=1).squeeze(1)
-            if self.task == "text-generation":
-                valid = flat_target != self.pad_id
-                return jnp.sum(jnp.where(valid, losses, 0.0)) / jnp.maximum(valid.sum(), 1)
-            return jnp.mean(losses)
+    def _get_loss_and_grad_jit(self):
+        if getattr(self, "_loss_and_grad_jit_fn", None) is None:
+            jax, jnp = _jax()
 
-        loss_scale = 128.0 if self.precision == "fp16" else 1.0
-        scaled_loss_fn = lambda *arguments: loss_fn(*arguments) * loss_scale
-        mask = jnp.ones_like(input_ids, dtype=jnp.float32) if attention_mask is None else jnp.asarray(attention_mask)
-        devices = jax.local_device_count()
-        if devices > 1 and input_ids.shape[0] % devices == 0:
+            def loss_fn(current, current_ids, current_target, current_mask):
+                forward = jax.checkpoint(self._forward_jax) if self.gradient_checkpointing else self._forward_jax
+                logits = forward(current, current_ids, current_mask)
+                flat_logits = logits.reshape(-1, logits.shape[-1]).astype(jnp.float32)
+                flat_target = current_target.reshape(-1)
+                log_probs = jax.nn.log_softmax(flat_logits, axis=-1)
+                losses = -jnp.take_along_axis(log_probs, flat_target[:, None], axis=1).squeeze(1)
+                if self.task == "text-generation":
+                    valid = flat_target != self.pad_id
+                    return jnp.sum(jnp.where(valid, losses, 0.0)) / jnp.maximum(valid.sum(), 1)
+                return jnp.mean(losses)
+
+            loss_scale = 128.0 if self.precision == "fp16" else 1.0
+            scaled_loss_fn = lambda *arguments: loss_fn(*arguments) * loss_scale
+            self._loss_and_grad_jit_fn = jax.jit(jax.value_and_grad(scaled_loss_fn))
+        return self._loss_and_grad_jit_fn
+
+    def _get_pmap_step(self):
+        if getattr(self, "_pmap_step_fn", None) is None:
+            jax, jnp = _jax()
+
+            def loss_fn(current, current_ids, current_target, current_mask):
+                forward = jax.checkpoint(self._forward_jax) if self.gradient_checkpointing else self._forward_jax
+                logits = forward(current, current_ids, current_mask)
+                flat_logits = logits.reshape(-1, logits.shape[-1]).astype(jnp.float32)
+                flat_target = current_target.reshape(-1)
+                log_probs = jax.nn.log_softmax(flat_logits, axis=-1)
+                losses = -jnp.take_along_axis(log_probs, flat_target[:, None], axis=1).squeeze(1)
+                if self.task == "text-generation":
+                    valid = flat_target != self.pad_id
+                    return jnp.sum(jnp.where(valid, losses, 0.0)) / jnp.maximum(valid.sum(), 1)
+                return jnp.mean(losses)
+
+            loss_scale = 128.0 if self.precision == "fp16" else 1.0
+            scaled_loss_fn = lambda *arguments: loss_fn(*arguments) * loss_scale
             per_device_loss = jax.value_and_grad(scaled_loss_fn)
 
             def mapped_step(current, ids, labels, current_mask):
@@ -136,14 +164,25 @@ class JaxTinyTransformer(TinyTransformer):
                     lambda gradient: jax.lax.pmean(gradient, "data"), gradients
                 )
 
+            self._pmap_step_fn = jax.pmap(mapped_step, axis_name="data", in_axes=(None, 0, 0, 0))
+        return self._pmap_step_fn
+
+    def loss_and_backward(self, input_ids, target, attention_mask=None):
+        jax, jnp = _jax()
+        params = self._jax_params()
+        target = jnp.asarray(target, dtype=jnp.int32)
+        loss_scale = 128.0 if self.precision == "fp16" else 1.0
+        mask = jnp.ones_like(input_ids, dtype=jnp.float32) if attention_mask is None else jnp.asarray(attention_mask)
+        devices = jax.local_device_count()
+        if devices > 1 and input_ids.shape[0] % devices == 0:
             shard = lambda value: value.reshape((devices, value.shape[0] // devices) + value.shape[1:])
-            loss, gradients = jax.pmap(mapped_step, axis_name="data", in_axes=(None, 0, 0, 0))(
+            loss, gradients = self._get_pmap_step()(
                 params, shard(jnp.asarray(input_ids)), shard(target), shard(mask)
             )
             loss = loss[0]
             gradients = jax.tree_util.tree_map(lambda gradient: gradient[0] / loss_scale, gradients)
         else:
-            loss, gradients = jax.value_and_grad(scaled_loss_fn)(params, input_ids, target, mask)
+            loss, gradients = self._get_loss_and_grad_jit()(params, input_ids, target, mask)
             gradients = jax.tree_util.tree_map(lambda gradient: gradient / loss_scale, gradients)
         for name, parameter in self.named_parameters():
             parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32)
@@ -213,8 +252,30 @@ class JaxTabularMLP(TabularMLP):
         params = self._jax_params()
         batch_size = numeric.shape[0] if self.n_numeric else categorical.shape[0]
         dropout_masks = self._make_dropout_masks(batch_size)
-        out = np.asarray(self._forward_jax(params, numeric, categorical, dropout_masks))
+        out = np.asarray(self._get_forward_jit()(params, numeric, categorical, dropout_masks))
         return (out, None) if cache else out
+
+    def _get_forward_jit(self):
+        if getattr(self, "_forward_jit_fn", None) is None:
+            jax, _ = _jax()
+            self._forward_jit_fn = jax.jit(self._forward_jax)
+        return self._forward_jit_fn
+
+    def _get_loss_and_grad_jit(self):
+        if getattr(self, "_loss_and_grad_jit_fn", None) is None:
+            jax, jnp = _jax()
+            is_regression = self.task == "regression"
+
+            def loss_fn(current, numeric, categorical, dropout_masks, target_arr):
+                logits = self._forward_jax(current, numeric, categorical, dropout_masks)
+                if is_regression:
+                    error = logits - target_arr
+                    return jnp.mean(error * error)
+                log_probs = jax.nn.log_softmax(logits, axis=-1)
+                return -jnp.mean(jnp.take_along_axis(log_probs, target_arr[:, None], axis=1))
+
+            self._loss_and_grad_jit_fn = jax.jit(jax.value_and_grad(loss_fn))
+        return self._loss_and_grad_jit_fn
 
     def loss_and_backward(self, numeric, categorical, target):
         jax, jnp = _jax()
@@ -224,15 +285,7 @@ class JaxTabularMLP(TabularMLP):
         is_regression = self.task == "regression"
         target_arr = jnp.asarray(target, dtype=jnp.float32 if is_regression else jnp.int32)
 
-        def loss_fn(current):
-            logits = self._forward_jax(current, numeric, categorical, dropout_masks)
-            if is_regression:
-                error = logits - target_arr
-                return jnp.mean(error * error)
-            log_probs = jax.nn.log_softmax(logits, axis=-1)
-            return -jnp.mean(jnp.take_along_axis(log_probs, target_arr[:, None], axis=1))
-
-        loss, gradients = jax.value_and_grad(loss_fn)(params)
+        loss, gradients = self._get_loss_and_grad_jit()(params, numeric, categorical, dropout_masks, target_arr)
         for name, parameter in self.named_parameters():
             parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32)
         return float(loss)
