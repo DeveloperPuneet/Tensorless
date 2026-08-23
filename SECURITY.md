@@ -6,7 +6,7 @@ We actively provide security updates for the following versions:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.3.x   | :white_check_mark: |
+| 0.9.x   | :white_check_mark: |
 
 Older versions are not currently supported with security updates. Users are encouraged to upgrade to a supported version whenever possible.
 
