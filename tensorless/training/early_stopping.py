@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 class EarlyStopping:
-    def __init__(self, patience: int = 3, min_delta: float = 1e-4):
+    def __init__(self, patience: int = 5, min_delta: float = 1e-4):
         self.patience = patience
         self.min_delta = min_delta
         self.best: float = float("inf")

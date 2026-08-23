@@ -104,9 +104,10 @@ def test_regression_scaling_resists_extreme_outlier():
     assert prep.target_std < 20
 
 
-def test_early_stopping_stops_after_three_bad_epochs():
-    stopping = EarlyStopping(patience=3)
+def test_early_stopping_stops_after_five_bad_epochs():
+    stopping = EarlyStopping()
     assert stopping.step(1.0) is True
+    assert stopping.step(1.1) is False
     assert stopping.step(1.1) is False
     assert stopping.step(1.1) is False
     assert stopping.step(1.1) is False

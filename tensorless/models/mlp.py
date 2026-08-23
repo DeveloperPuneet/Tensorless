@@ -12,10 +12,18 @@ def _embedding_dim(vocab_size: int) -> int:
     return max(2, min(32, round(1.6 * (vocab_size ** 0.56))))
 
 
+def _dropout(value, probability, training):
+    if not training or probability <= 0:
+        return value, None
+    keep = np.random.random(value.shape) >= probability
+    return value * keep / (1.0 - probability), keep
+
+
 class TabularMLP(Module):
     def __init__(self, n_numeric, categorical_vocab_sizes: List[int], d_model, layers, dropout, task, n_classes=0):
         self.training = True
         self.task = task
+        self.dropout = dropout
         self.n_numeric = n_numeric
         self.categorical_vocab_sizes = categorical_vocab_sizes
         self.embeddings = [Parameter(np.random.normal(0, .02, (v, _embedding_dim(v))).astype(np.float32)) for v in categorical_vocab_sizes]
@@ -35,15 +43,18 @@ class TabularMLP(Module):
             parts.append(embedding.data[categorical[:, i]])
         x = np.concatenate(parts, axis=1) if parts else numeric.astype(np.float32)
         activations = [x]
+        dropout_masks = []
         for weight, bias in zip(self.weights, self.biases):
             x = np.maximum(0, x @ weight.data + bias.data)
+            x, dropout_mask = _dropout(x, self.dropout, self.training)
             activations.append(x)
+            dropout_masks.append(dropout_mask)
         out = x @ self.head_weight.data + self.head_bias.data
         if self.task == "regression": out = out[:, 0]
-        return (out, (activations, categorical)) if cache else out
+        return (out, (activations, categorical, dropout_masks)) if cache else out
 
     def loss_and_backward(self, numeric, categorical, target):
-        logits, (activations, categorical) = self.forward(numeric, categorical, cache=True)
+        logits, (activations, categorical, dropout_masks) = self.forward(numeric, categorical, cache=True)
         if self.task == "regression":
             error = logits - target
             loss = float(np.mean(error * error))
@@ -57,6 +68,8 @@ class TabularMLP(Module):
         self.head_bias.grad[...] = grad.sum(0)
         dx = grad @ self.head_weight.data.T
         for i in range(len(self.weights) - 1, -1, -1):
+            if dropout_masks[i] is not None:
+                dx *= dropout_masks[i] / (1.0 - self.dropout)
             dx = dx * (activations[i + 1] > 0)
             self.weights[i].grad[...] = activations[i].T @ dx
             self.biases[i].grad[...] = dx.sum(0)
