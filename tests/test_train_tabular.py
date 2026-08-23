@@ -111,4 +111,5 @@ def test_early_stopping_stops_after_five_bad_epochs():
     assert stopping.step(1.1) is False
     assert stopping.step(1.1) is False
     assert stopping.step(1.1) is False
+    assert stopping.step(1.1) is False
     assert stopping.should_stop is True

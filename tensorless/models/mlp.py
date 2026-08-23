@@ -19,6 +19,17 @@ def _dropout(value, probability, training):
     return value * keep / (1.0 - probability), keep
 
 
+def _gelu(value):
+    scaled = np.sqrt(2.0 / np.pi) * (value + 0.044715 * value ** 3)
+    return 0.5 * value * (1.0 + np.tanh(scaled))
+
+
+def _gelu_backward(value):
+    scaled = np.sqrt(2.0 / np.pi) * (value + 0.044715 * value ** 3)
+    tanh_scaled = np.tanh(scaled)
+    return 0.5 * (1.0 + tanh_scaled) + 0.5 * value * (1.0 - tanh_scaled ** 2) * np.sqrt(2.0 / np.pi) * (1.0 + 3.0 * 0.044715 * value ** 2)
+
+
 class TabularMLP(Module):
     def __init__(self, n_numeric, categorical_vocab_sizes: List[int], d_model, layers, dropout, task, n_classes=0):
         self.training = True
@@ -43,18 +54,21 @@ class TabularMLP(Module):
             parts.append(embedding.data[categorical[:, i]])
         x = np.concatenate(parts, axis=1) if parts else numeric.astype(np.float32)
         activations = [x]
+        preactivations = []
         dropout_masks = []
         for weight, bias in zip(self.weights, self.biases):
-            x = np.maximum(0, x @ weight.data + bias.data)
+            preactivation = x @ weight.data + bias.data
+            x = _gelu(preactivation)
             x, dropout_mask = _dropout(x, self.dropout, self.training)
+            preactivations.append(preactivation)
             activations.append(x)
             dropout_masks.append(dropout_mask)
         out = x @ self.head_weight.data + self.head_bias.data
         if self.task == "regression": out = out[:, 0]
-        return (out, (activations, categorical, dropout_masks)) if cache else out
+        return (out, (activations, preactivations, categorical, dropout_masks)) if cache else out
 
     def loss_and_backward(self, numeric, categorical, target):
-        logits, (activations, categorical, dropout_masks) = self.forward(numeric, categorical, cache=True)
+        logits, (activations, preactivations, categorical, dropout_masks) = self.forward(numeric, categorical, cache=True)
         if self.task == "regression":
             error = logits - target
             loss = float(np.mean(error * error))
@@ -70,7 +84,7 @@ class TabularMLP(Module):
         for i in range(len(self.weights) - 1, -1, -1):
             if dropout_masks[i] is not None:
                 dx *= dropout_masks[i] / (1.0 - self.dropout)
-            dx = dx * (activations[i + 1] > 0)
+            dx *= _gelu_backward(preactivations[i])
             self.weights[i].grad[...] = activations[i].T @ dx
             self.biases[i].grad[...] = dx.sum(0)
             dx = dx @ self.weights[i].data.T
