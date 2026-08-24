@@ -37,9 +37,33 @@ def _mps_available() -> bool:
         return False
 
 
+_BF16_CAPABLE_GPU_HINTS = (
+    "a100", "a10", "a30", "a40", "l4", "l40", "l20",
+    "h100", "h200", "h800", "b100", "b200", "gh200",
+    "rtx 30", "rtx 40", "rtx 50", "rtx a", "geforce rtx 30", "geforce rtx 40", "geforce rtx 50",
+)
+
+
 def _cuda_supports_bf16() -> bool:
-    """Use the conservative CUDA default unless hardware is identified."""
-    return False
+    """Best-effort detection of real (fast) bf16 tensor-core support.
+
+    Older GPUs (Turing/Volta/Pascal -- T4, V100, P100, K80, RTX 20xx) either
+    lack bf16 tensor cores or emulate bf16 slowly, so fp16 (with loss
+    scaling) is the safer/faster default there. Ampere-or-newer GPUs (A100,
+    L4, H100, RTX 30xx+, ...) run bf16 at full tensor-core speed and don't
+    need loss scaling, so we opt in automatically when the detected GPU name
+    matches a known Ampere-or-newer architecture. Anything unrecognized
+    conservatively falls back to fp16, matching the previous behavior.
+    """
+    try:
+        import jax
+        gpus = [d for d in jax.devices() if d.platform == "gpu"]
+        if not gpus:
+            return False
+        name = getattr(gpus[0], "device_kind", "").lower()
+        return any(hint in name for hint in _BF16_CAPABLE_GPU_HINTS)
+    except (ImportError, RuntimeError):
+        return False
 
 
 def auto_select_device(user_device: Optional[str], user_precision: Optional[str]) -> Tuple[str, str]:

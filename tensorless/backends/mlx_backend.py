@@ -117,16 +117,35 @@ class MlxTinyTransformer(TinyTransformer):
             parameter.grad[...] = np.asarray(gradients[name], dtype=np.float32) / loss_scale
         return float(np.asarray(loss)) / loss_scale
 
-    def generate(self, input_ids, max_new_tokens, temperature=.8, top_k=40, eos_id: Optional[int] = None):
+    def generate(self, input_ids, max_new_tokens, temperature=.8, top_k=40, top_p=.9,
+                 repetition_penalty=1.1, eos_id: Optional[int] = None):
+        # Mirrors `TinyTransformer.generate` (the NumPy path) exactly, so
+        # generation quality doesn't quietly regress just because a model
+        # happens to run on mps.
         ids = np.asarray(input_ids, dtype=np.int64).copy()
         for _ in range(max_new_tokens):
             logits = self.forward(ids[:, -self.max_seq_len:])[:, -1, :] / max(temperature, 1e-5)
+            if repetition_penalty and repetition_penalty > 1.0:
+                for row, sequence in enumerate(ids):
+                    seen = np.unique(sequence)
+                    logits[row, seen] = np.where(
+                        logits[row, seen] < 0,
+                        logits[row, seen] * repetition_penalty,
+                        logits[row, seen] / repetition_penalty,
+                    )
             if top_k is not None:
                 k = min(top_k, logits.shape[-1])
                 excluded = np.argpartition(logits, -k, axis=1)[:, :-k]
                 logits[np.arange(len(ids))[:, None], excluded] = -np.inf
             probs = np.exp(logits - logits.max(1, keepdims=True))
             probs /= probs.sum(1, keepdims=True)
+            if top_p is not None and 0 < top_p < 1:
+                order = np.argsort(-probs, axis=1)
+                sorted_probs = np.take_along_axis(probs, order, axis=1)
+                cutoff = np.cumsum(sorted_probs, axis=1) > top_p
+                cutoff[:, 0] = False
+                probs[np.arange(len(ids))[:, None], order] = np.where(cutoff, 0.0, sorted_probs)
+                probs /= probs.sum(1, keepdims=True)
             next_ids = np.array([np.random.choice(logits.shape[1], p=p) for p in probs])[:, None]
             ids = np.concatenate([ids, next_ids], axis=1)
             if eos_id is not None and np.all(next_ids == eos_id):

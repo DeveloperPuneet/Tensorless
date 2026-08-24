@@ -86,6 +86,26 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
                 "Keep the task, tokenizer, and architecture dimensions compatible."
             ) from exc
     optimizer = _build_optimizer(model, cfg)
+
+    # Fused device-resident training: for jax models trained with Adam/AdamW
+    # on a single accelerator, keep params + optimizer moments on the
+    # GPU/TPU for the whole run instead of re-uploading the full parameter
+    # dict and downloading the full gradient dict through host NumPy on
+    # every step (what the plain `Adam`/`AdamW` classes in `engine.py` force
+    # `loss_and_backward` to do). This is what actually keeps the
+    # accelerator busy once JIT tracing overhead is no longer the
+    # bottleneck. Multi-device (pmap) runs and non-Adam optimizers keep
+    # using the existing host-side path.
+    use_fused = False
+    fused_decoupled = cfg["optimizer"].lower() == "adamw"
+    if backend == "jax" and cfg["optimizer"].lower() in ("adam", "adamw"):
+        from ..backends.jax_backend import supports_fused_training
+        if supports_fused_training(model):
+            try:
+                import jax
+                use_fused = jax.local_device_count() == 1
+            except ImportError:
+                use_fused = False
     total_steps = cfg.get("max_steps") or max(1, len(prepared.train_loader)) * cfg["epochs"]
     scheduler = LambdaScheduler(optimizer, cfg["warmup_steps"], total_steps)
     early_stopper = EarlyStopping(patience=cfg["patience"], min_delta=cfg["min_delta"])
@@ -98,7 +118,30 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
         early_stopper.best = resume_state.get("early_stopping_best", float("inf")); early_stopper.num_bad_checks = resume_state.get("early_stopping_bad_checks", 0)
         if resume_state.get("best_model_state_dict") is not None:
             best_model_state = resume_state["best_model_state_dict"]
+
+    if use_fused:
+        param_names = [name for name, _ in model.named_parameters()]
+        model.init_fused_state(cfg["weight_decay"], fused_decoupled, step=optimizer.step_count)
+        if resume_state:
+            model.load_fused_optimizer_moments(
+                dict(zip(param_names, optimizer.m)), dict(zip(param_names, optimizer.v))
+            )
+
+    def sync_fused():
+        """Bring device-resident params/moments back to host NumPy so
+        `model.state_dict()`/`model.forward()`/`optimizer.state_dict()`
+        reflect the latest step. Only called at checkpoint/validation/
+        end-of-training boundaries -- not every step."""
+        if not use_fused:
+            return
+        param_names = [name for name, _ in model.named_parameters()]
+        m_by_name, v_by_name = model.sync_fused_to_host()
+        optimizer.m = [m_by_name[name] for name in param_names]
+        optimizer.v = [v_by_name[name] for name in param_names]
+        optimizer.step_count = model._fused_step
+
     def checkpoint(epoch, complete):
+        sync_fused()
         checkpoint_mgr.save({"epoch": epoch, "global_step": global_step, "train_loader_epoch": prepared.train_loader.epoch, "model_state_dict": model.state_dict(), "best_model_state_dict": best_model_state, "optimizer_state_dict": optimizer.state_dict(), "scheduler_state_dict": scheduler.state_dict(), "early_stopping_best": early_stopper.best, "early_stopping_bad_checks": early_stopper.num_bad_checks, "config": cfg, "meta": prepared.meta, "tokenizer_state": prepared.tokenizer.state_dict() if prepared.tokenizer else None, "preprocessor_state": prepared.preprocessor.state_dict() if prepared.preprocessor else None, "dataset_fingerprint": dataset_fingerprint, "training_complete": complete})
     last_train_loss = last_val_loss = None
     t0 = time.time(); stop = False
@@ -109,16 +152,37 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
         total_epoch_steps = len(prepared.train_loader)
         for batch in prepared.train_loader:
             epoch_step += 1
-            optimizer.zero_grad(); last_train_loss = _compute_loss(task, model_type, model, batch, prepared.meta.get("pad_id", 0));
-            if not np.isfinite(last_train_loss):
-                raise FloatingPointError(f"Non-finite training loss at step {global_step + 1}: {last_train_loss}")
-            if cfg["grad_clip"]:
-                norm = np.sqrt(sum(float(np.sum(p.grad.astype(np.float64) ** 2)) for p in model.parameters()))
-                if not np.isfinite(norm):
-                    raise FloatingPointError(f"Non-finite gradient norm at step {global_step + 1}: {norm}")
-                if norm > cfg["grad_clip"]:
-                    for p in model.parameters(): p.grad *= cfg["grad_clip"] / (norm + 1e-12)
-            optimizer.step(); scheduler.step(); global_step += 1
+            if use_fused:
+                grad_clip = cfg["grad_clip"] or 0.0
+                if model_type == "transformer" and task == "text-generation":
+                    last_train_loss, grad_norm = model.fused_train_step(
+                        batch[0], batch[1], None, optimizer.lr, cfg["weight_decay"], grad_clip, fused_decoupled
+                    )
+                elif model_type == "transformer":
+                    last_train_loss, grad_norm = model.fused_train_step(
+                        batch[0], batch[2], batch[1], optimizer.lr, cfg["weight_decay"], grad_clip, fused_decoupled
+                    )
+                else:
+                    numeric, categorical, target = batch
+                    last_train_loss, grad_norm = model.fused_train_step(
+                        numeric, categorical, target, optimizer.lr, cfg["weight_decay"], grad_clip, fused_decoupled
+                    )
+                if not np.isfinite(last_train_loss):
+                    raise FloatingPointError(f"Non-finite training loss at step {global_step + 1}: {last_train_loss}")
+                if grad_clip and not np.isfinite(grad_norm):
+                    raise FloatingPointError(f"Non-finite gradient norm at step {global_step + 1}: {grad_norm}")
+            else:
+                optimizer.zero_grad(); last_train_loss = _compute_loss(task, model_type, model, batch, prepared.meta.get("pad_id", 0));
+                if not np.isfinite(last_train_loss):
+                    raise FloatingPointError(f"Non-finite training loss at step {global_step + 1}: {last_train_loss}")
+                if cfg["grad_clip"]:
+                    norm = np.sqrt(sum(float(np.sum(p.grad.astype(np.float64) ** 2)) for p in model.parameters()))
+                    if not np.isfinite(norm):
+                        raise FloatingPointError(f"Non-finite gradient norm at step {global_step + 1}: {norm}")
+                    if norm > cfg["grad_clip"]:
+                        for p in model.parameters(): p.grad *= cfg["grad_clip"] / (norm + 1e-12)
+                optimizer.step()
+            scheduler.step(); global_step += 1
             if progress_enabled:
                 _show_progress(epoch + 1, cfg["epochs"], epoch_step, total_epoch_steps, last_train_loss)
             if global_step % cfg["checkpoint_every"] == 0: checkpoint(epoch, False)
@@ -128,6 +192,7 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
         if stop:
             break
         if prepared.val_loader:
+            sync_fused()
             model.eval(); losses = [_compute_loss(task, model_type, model, batch, prepared.meta.get("pad_id", 0), False) for batch in prepared.val_loader]; last_val_loss = sum(losses) / max(1, len(losses))
             if not np.isfinite(last_val_loss):
                 raise FloatingPointError(f"Non-finite validation loss after epoch {epoch + 1}: {last_val_loss}")
@@ -146,6 +211,7 @@ def run_training(ds: Dataset, cfg: Dict[str, Any], checkpoint_mgr: CheckpointMan
                 f"train_loss={last_train_loss:.4f}"
             )
         checkpoint(epoch + 1, epoch + 1 >= cfg["epochs"])
+    sync_fused()
     elapsed = time.time() - t0
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
